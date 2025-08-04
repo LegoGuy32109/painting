@@ -25,23 +25,23 @@ const Colors = {
 }
 
 const BRUSH_CHARACTER = '0'
+const CURSOR_CHARACTER = 'X'
 const BrushSizes = {
-  Tiny: `0`,
+  Tiny: `X`,
 
-  Small: `00
+  Small: `X0
           00`,
 
   Medium: `_00_
-          0000
+          0X00
           0000
           _00_`,
 
-  Large: `_0000_
-         000000
-         000000
-         000000
-         000000
-         _0000_`,
+  Large: `_000_
+          00000
+          00X00
+          00000
+          _000_`,
 }
 
 function App() {
@@ -168,14 +168,23 @@ function App() {
     }
 
     const mapSideLength = Math.sqrt(mapPlain.length)
-    const brushOffset = Math.floor(mapSideLength / 2) - 1
+    if (!Number.isInteger(mapSideLength)) {
+      throw new Error('Brush map must be a square')
+    }
+    const cursorIndex = mapPlain.indexOf(CURSOR_CHARACTER)
+    if (cursorIndex === -1) {
+      console.warn(`No '${CURSOR_CHARACTER}' in brush map, setting to (0, 0)`)
+    }
+
+    const brushOffsetX = cursorIndex % mapSideLength
+    const brushOffsetY = Math.floor(cursorIndex / mapSideLength)
 
     mapPlain.split('').forEach((char, index) => {
-      if (char === BRUSH_CHARACTER) {
+      if (char === BRUSH_CHARACTER || char === CURSOR_CHARACTER) {
         const dx = index % mapSideLength
         const dy = Math.floor(index / mapSideLength)
-        const xCoord = (x + dx - brushOffset) * PIXEL_SIZE
-        const yCoord = (y + dy - brushOffset) * PIXEL_SIZE
+        const xCoord = (x + dx - brushOffsetX) * PIXEL_SIZE
+        const yCoord = (y + dy - brushOffsetY) * PIXEL_SIZE
         ctx.fillRect(xCoord, yCoord, PIXEL_SIZE, PIXEL_SIZE)
       }
     })
@@ -215,6 +224,7 @@ function App() {
         />
         <div
           style={{
+            touchAction: 'none',
             width: CANVAS_SIZE,
             height: CANVAS_SIZE,
             position: 'absolute',
