@@ -5,6 +5,7 @@ const PIXEL_SIZE = 12
 const GRID_SIZE = 32
 const CANVAS_SIZE = PIXEL_SIZE * GRID_SIZE
 
+type RGB = { r: number, g: number, b: number }
 const Colors = {
   White: "#F9FFFE",
   Orange: "#F9801D",
@@ -44,29 +45,84 @@ const BrushSizes = {
           _000_`,
 }
 
+const Opacities = {
+  Full: 1,
+  Half: 0.5,
+  Quarter: 0.25,
+  Eighth: 0.125
+}
+
+const hexToRgb = (hex: string): RGB => {
+  hex = hex.replace('#', '')
+  const num = parseInt(hex, 16)
+  return {
+    r: (num >> 16) & 255,
+    g: (num >> 8) & 255,
+    b: num & 255,
+  }
+}
+
+const rgbToHex = ({ r, g, b }: RGB): string => {
+  const toHex = (n: number) => n.toString(16).padStart(2, '0')
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+}
+
+const blendColors = (currentColor: string, newColor: string, alpha: number) => {
+  const currentRgb = hexToRgb(currentColor)
+  const newRgb = hexToRgb(newColor)
+
+  const blendChannel = (newChannel: number, currentChannel: number) => Math.round(newChannel * alpha + currentChannel * (1 - alpha))
+  const blendR = blendChannel(newRgb.r, currentRgb.r)
+  const blendG = blendChannel(newRgb.g, currentRgb.g)
+  const blendB = blendChannel(newRgb.b, currentRgb.b)
+
+  return rgbToHex({ r: blendR, g: blendG, b: blendB })
+}
+
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
 
-  const [mouseCoords, setMouseCoords] = useState<{ x: number; y: number }>()
+  const [brushCoords, setBrushCoords] = useState<{ x: number; y: number }>()
   const [strokeDown, setStrokeDown] = useState(false)
   const [brushColor, setBrushColor] = useState<string>(Colors.Red)
-  const [brushMap, setBrushMap] = useState<string>()
+  const [brushMap, setBrushMap] = useState<string>(BrushSizes.Medium)
+  const [opacity, setOpacity] = useState<number>(Opacities.Full)
+
+  const [canvasData, setCanvasData] = useState<string[][]>(Array.from({ length: GRID_SIZE }, () => Array.from({ length: GRID_SIZE }, () => Colors.White)))
 
   // show outline of where stroke will be on canvas
   useEffect(() => {
     const ctx = overlayRef.current?.getContext('2d')
     if (!ctx) return
-
     ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
 
-    if (mouseCoords && !strokeDown) {
-      const { x, y } = mouseCoords
+    if (brushCoords && !strokeDown) {
+      const { x, y } = brushCoords
       ctx.strokeStyle = 'black'
       ctx.lineWidth = 1
       ctx.strokeRect(x * PIXEL_SIZE + 0.5, y * PIXEL_SIZE + 0.5, PIXEL_SIZE - 1, PIXEL_SIZE - 1)
     }
-  }, [mouseCoords])
+  }, [brushCoords])
+
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+
+    let x = 0
+    let y = 0
+    for (const column of canvasData) {
+      for (const color of column) {
+        ctx.fillStyle = color
+        ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE)
+        y += 1
+      }
+      x += 1
+      y = 0
+    }
+
+  }, [canvasData])
 
   const getMouseCoords = (event: MouseEvent<HTMLDivElement>) => {
     if (!canvasRef.current) return
@@ -89,12 +145,16 @@ function App() {
     if (!coords) return
     const { x, y } = coords
 
-    if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
-      setMouseCoords({ x, y })
+    // don't draw out of bounds
+    if (x < 0 || x >= GRID_SIZE || y < 0 && y >= GRID_SIZE) {
+      setBrushCoords(undefined)
+      return
     }
-    else {
-      setMouseCoords(undefined)
+    // don't re-paint on same pixel
+    if (brushCoords?.x === x && brushCoords?.y === y) {
+      return
     }
+    setBrushCoords({ x, y })
 
     if (!strokeDown) return
 
@@ -102,11 +162,11 @@ function App() {
     if (!ctx) return
 
     ctx.fillStyle = brushColor
-    drawBrush(ctx, x, y)
+    drawBrush(x, y)
   }
 
   const handleMouseLeave = () => {
-    setMouseCoords(undefined);
+    setBrushCoords(undefined);
   }
 
   const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
@@ -120,7 +180,7 @@ function App() {
     if (!ctx) return
 
     ctx.fillStyle = brushColor
-    drawBrush(ctx, x, y)
+    drawBrush(x, y)
   }
 
   const handleMouseUp = () => {
@@ -156,14 +216,13 @@ function App() {
     if (!ctx) return
 
     ctx.fillStyle = brushColor
-    drawBrush(ctx, x, y)
+    drawBrush(x, y)
   }
 
-  const drawBrush = (ctx: CanvasRenderingContext2D, x: number, y: number) => {
+  const drawBrush = (x: number, y: number) => {
     // remove all white space
     const mapPlain = brushMap?.replace(/\s+/g, '')
-    if (!mapPlain || mapPlain.length === 1) {
-      ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE)
+    if (!mapPlain) {
       return
     }
 
@@ -171,23 +230,40 @@ function App() {
     if (!Number.isInteger(mapSideLength)) {
       throw new Error('Brush map must be a square')
     }
-    const cursorIndex = mapPlain.indexOf(CURSOR_CHARACTER)
+    let cursorIndex = mapPlain.indexOf(CURSOR_CHARACTER)
     if (cursorIndex === -1) {
       console.warn(`No '${CURSOR_CHARACTER}' in brush map, setting to (0, 0)`)
+      cursorIndex = 0
     }
 
     const brushOffsetX = cursorIndex % mapSideLength
     const brushOffsetY = Math.floor(cursorIndex / mapSideLength)
 
+    const stroke: Array<{ x: number, y: number, color: string }> = []
     mapPlain.split('').forEach((char, index) => {
       if (char === BRUSH_CHARACTER || char === CURSOR_CHARACTER) {
         const dx = index % mapSideLength
         const dy = Math.floor(index / mapSideLength)
-        const xCoord = (x + dx - brushOffsetX) * PIXEL_SIZE
-        const yCoord = (y + dy - brushOffsetY) * PIXEL_SIZE
-        ctx.fillRect(xCoord, yCoord, PIXEL_SIZE, PIXEL_SIZE)
+        const xCoord = (x + dx - brushOffsetX)
+        const yCoord = (y + dy - brushOffsetY)
+        if (xCoord >= 0 && xCoord < GRID_SIZE && yCoord >= 0 && yCoord < GRID_SIZE) {
+          //const currentColor = canvasData[xCoord][yCoord]
+          //const newColor = blendColors(currentColor, brushColor, opacity)
+          stroke.push({ x: xCoord, y: yCoord, color: brushColor })
+        }
       }
     })
+
+    // determine if the state variable needs to be updated
+    //if (stroke.some(({ x, y, color }) => canvasData[x][y] !== color)) {
+      setCanvasData(canvas => {
+        const newCanvas = canvas.map(row => [...row])
+        for (const { x, y, color } of stroke) {
+          newCanvas[x][y] = color
+        }
+        return newCanvas
+      })
+    //}
   }
 
   const handlePalleteClick = (color: string) => {
@@ -254,6 +330,12 @@ function App() {
             🖌️
           </div>
         )}
+        {Object.entries(Opacities).map(([name, alpha]) =>
+          <div
+            key={name}
+            style={{ height: 32, width: 32, backgroundColor: Colors.Red, opacity: alpha }}
+            onClick={() => setOpacity(alpha)}
+          />)}
       </div>
       <div style={{
         display: 'grid',
