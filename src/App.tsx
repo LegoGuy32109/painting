@@ -79,17 +79,34 @@ const blendColors = (currentColor: string, newColor: string, alpha: number) => {
   return rgbToHex({ r: blendR, g: blendG, b: blendB })
 }
 
+const makeMatrix = <T,>(length: number, value: T): T[][] => Array.from({ length }, () => Array.from({ length }, () => value))
+
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
 
   const [brushCoords, setBrushCoords] = useState<{ x: number; y: number }>()
   const [strokeDown, setStrokeDown] = useState(false)
-  const [brushColor, setBrushColor] = useState<string>(Colors.Red)
-  const [brushMap, setBrushMap] = useState<string>(BrushSizes.Medium)
-  const [opacity, setOpacity] = useState<number>(Opacities.Full)
 
-  const [canvasData, setCanvasData] = useState<string[][]>(Array.from({ length: GRID_SIZE }, () => Array.from({ length: GRID_SIZE }, () => Colors.White)))
+  // what's being rendered on screen
+  // state to restore session on load kept here
+  type CanvasData = {
+    canvas: string[][],
+    brushColor: string,
+    brushMap: string,
+    opacity: number
+  }
+  const [canvasData, setCanvasData] = useState<CanvasData>({
+    canvas: makeMatrix(GRID_SIZE, Colors.White),
+    brushColor: Colors.Red,
+    brushMap: BrushSizes.Tiny,
+    opacity: Opacities.Full
+  })
+
+  // the current stroke with mouse / touch down
+  const [, setStrokeData] = useState<boolean[][]>(makeMatrix(GRID_SIZE, false))
+  // snapshots of painting for undo
+  const [, setCanvasHistory] = useState<string[][][]>([])
 
   // show outline of where stroke will be on canvas
   useEffect(() => {
@@ -97,7 +114,7 @@ function App() {
     if (!ctx) return
     ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
 
-    if (brushCoords && !strokeDown) {
+    if (brushCoords) {
       const { x, y } = brushCoords
       ctx.strokeStyle = 'black'
       ctx.lineWidth = 1
@@ -106,28 +123,31 @@ function App() {
   }, [brushCoords])
 
   useEffect(() => {
-    const ctx = canvasRef.current?.getContext('2d')
-    if (!ctx) return
-    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
-
-    let x = 0
-    let y = 0
-    for (const column of canvasData) {
-      for (const color of column) {
-        ctx.fillStyle = color
-        ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE)
-        y += 1
-      }
-      x += 1
-      y = 0
+    const handleMouseUp = (_: unknown) => {
+      setStrokeDown(isStrokeDown => {
+        // don't trigger if a stroke wasn't started on canvas
+        if (isStrokeDown) {
+          setStrokeData(currentStrokeData => {
+            setCanvasData(prev => {
+              setCanvasHistory(history => [prev.canvas, ...history.slice(0, 10)])
+              console.log('overlaying new canvas')
+              const newCanvas = overlayStrokeData(prev, currentStrokeData)
+              if (!newCanvas) console.warn('error overlaying stroke')
+              return { ...prev, canvas: newCanvas ?? prev.canvas }
+            })
+            return makeMatrix(GRID_SIZE, false)
+          })
+        }
+        return false
+      })
     }
 
-  }, [canvasData])
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp)
+  }, []);
 
   const getMouseCoords = (event: MouseEvent<HTMLDivElement>) => {
     if (!canvasRef.current) return
-    const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return
 
     const { clientX, clientY } = event
     const { left, top } = canvasRef.current.getBoundingClientRect()
@@ -157,11 +177,6 @@ function App() {
     setBrushCoords({ x, y })
 
     if (!strokeDown) return
-
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return
-
-    ctx.fillStyle = brushColor
     drawBrush(x, y)
   }
 
@@ -175,22 +190,11 @@ function App() {
     const { x, y } = coords
 
     setStrokeDown(true)
-
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return
-
-    ctx.fillStyle = brushColor
     drawBrush(x, y)
-  }
-
-  const handleMouseUp = () => {
-    setStrokeDown(false)
   }
 
   const getTouchCoords = (event: TouchEvent<HTMLDivElement>) => {
     if (!canvasRef.current) return
-    const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return
 
     const { clientX, clientY } = event.touches[0]
     const { left, top } = canvasRef.current.getBoundingClientRect()
@@ -212,16 +216,12 @@ function App() {
       return
     }
 
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return
-
-    ctx.fillStyle = brushColor
     drawBrush(x, y)
   }
 
   const drawBrush = (x: number, y: number) => {
     // remove all white space
-    const mapPlain = brushMap?.replace(/\s+/g, '')
+    const mapPlain = canvasData.brushMap?.replace(/\s+/g, '')
     if (!mapPlain) {
       return
     }
@@ -239,7 +239,7 @@ function App() {
     const brushOffsetX = cursorIndex % mapSideLength
     const brushOffsetY = Math.floor(cursorIndex / mapSideLength)
 
-    const stroke: Array<{ x: number, y: number, color: string }> = []
+    const stroke: Array<{ x: number, y: number }> = []
     mapPlain.split('').forEach((char, index) => {
       if (char === BRUSH_CHARACTER || char === CURSOR_CHARACTER) {
         const dx = index % mapSideLength
@@ -247,36 +247,60 @@ function App() {
         const xCoord = (x + dx - brushOffsetX)
         const yCoord = (y + dy - brushOffsetY)
         if (xCoord >= 0 && xCoord < GRID_SIZE && yCoord >= 0 && yCoord < GRID_SIZE) {
-          //const currentColor = canvasData[xCoord][yCoord]
-          //const newColor = blendColors(currentColor, brushColor, opacity)
-          stroke.push({ x: xCoord, y: yCoord, color: brushColor })
+          stroke.push({ x: xCoord, y: yCoord })
         }
       }
     })
 
-    // determine if the state variable needs to be updated
-    //if (stroke.some(({ x, y, color }) => canvasData[x][y] !== color)) {
-      setCanvasData(canvas => {
-        const newCanvas = canvas.map(row => [...row])
-        for (const { x, y, color } of stroke) {
-          newCanvas[x][y] = color
-        }
-        return newCanvas
-      })
-    //}
+    setStrokeData(strokeData => {
+      const updatedData = strokeData.map(row => [...row])
+      for (const { x, y } of stroke) {
+        updatedData[x][y] = true
+      }
+      overlayStrokeData(canvasData, updatedData)
+      console.log('finished overlay')
+      return updatedData
+    })
   }
 
-  const handlePalleteClick = (color: string) => {
-    return () => setBrushColor(color)
+  const overlayStrokeData = (canvasData: CanvasData, updatedStrokeData: boolean[][]) => {
+    const ctx = canvasRef.current?.getContext('2d')
+    if (!ctx) return
+
+    const { canvas, brushColor, opacity } = canvasData
+    const canvasCopy = canvas.map(row => [...row])
+
+    for (let x = 0; x < GRID_SIZE; x++) {
+      for (let y = 0; y < GRID_SIZE; y++) {
+        const strokeHere = updatedStrokeData[x][y]
+        const currentColor = canvasCopy[x][y]
+        const color = strokeHere ? blendColors(currentColor, brushColor, opacity) : currentColor
+        ctx.fillStyle = color
+        ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE)
+        // update the canvas
+        canvasCopy[x][y] = color
+      }
+    }
+
+    return canvasCopy
   }
 
-  const handleBrushSelect = (map: string) => {
-    return () => setBrushMap(map)
+  const handlePalleteSelect = (brushColor: string) => {
+    return () => setCanvasData((prev) => ({ ...prev, brushColor }))
+  }
+
+  const handleBrushSelect = (brushMap: string) => {
+    return () => setCanvasData((prev) => ({ ...prev, brushMap }))
+  }
+
+  const handleOpacitySelect = (opacity: number) => {
+    return () => setCanvasData((prev) => ({ ...prev, opacity }))
   }
 
   return (
     <>
       <h1>Joy of Painting</h1>
+      <h1>{strokeDown ? 'strokeDown' : 'strokeUp'}</h1>
       <div style={{ position: 'relative', width: CANVAS_SIZE, height: CANVAS_SIZE }}>
         <canvas
           ref={canvasRef}
@@ -309,7 +333,6 @@ function App() {
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           onMouseDownCapture={handleMouseDown}
-          onMouseUp={handleMouseUp}
           onTouchMove={handleTouchMove}
         />
       </div>
@@ -330,11 +353,11 @@ function App() {
             🖌️
           </div>
         )}
-        {Object.entries(Opacities).map(([name, alpha]) =>
+        {Object.entries(Opacities).map(([name, opacity]) =>
           <div
             key={name}
-            style={{ height: 32, width: 32, backgroundColor: Colors.Red, opacity: alpha }}
-            onClick={() => setOpacity(alpha)}
+            style={{ height: 32, width: 32, backgroundColor: Colors.Red, opacity }}
+            onClick={handleOpacitySelect(opacity)}
           />)}
       </div>
       <div style={{
@@ -353,7 +376,7 @@ function App() {
           <div
             key={`pallete_${color}`}
             style={{ backgroundColor: color, width: '2em', height: '2em', borderRadius: '0.4em' }}
-            onClick={handlePalleteClick(color)}
+            onClick={handlePalleteSelect(color)}
           />
         )}
       </div>
