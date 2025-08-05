@@ -108,29 +108,20 @@ function App() {
   // snapshots of painting for undo
   const [, setCanvasHistory] = useState<string[][][]>([])
 
-  // show outline of where stroke will be on canvas
   useEffect(() => {
-    const ctx = overlayRef.current?.getContext('2d')
-    if (!ctx) return
-    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
-
-    if (brushCoords) {
-      const { x, y } = brushCoords
-      ctx.strokeStyle = 'black'
-      ctx.lineWidth = 1
-      ctx.strokeRect(x * PIXEL_SIZE + 0.5, y * PIXEL_SIZE + 0.5, PIXEL_SIZE - 1, PIXEL_SIZE - 1)
-    }
-  }, [brushCoords])
-
-  useEffect(() => {
-    const handleMouseUp = (_: unknown) => {
+    const endStroke = (_: unknown) => {
       setStrokeDown(isStrokeDown => {
         // don't trigger if a stroke wasn't started on canvas
         if (isStrokeDown) {
           setStrokeData(currentStrokeData => {
             setCanvasData(prev => {
-              setCanvasHistory(history => [prev.canvas, ...history.slice(0, 10)])
-              console.log('overlaying new canvas')
+              setCanvasHistory(history => {
+                // only save snapshot if edit makes distinct change
+                if (history.length > 0 && prev.canvas.some((row, x) => row.some((cell, y) => cell !== history[0][x][y]))) {
+                  return [prev.canvas, ...history.slice(0, 10)]
+                }
+                return history
+              })
               const newCanvas = overlayStrokeData(prev, currentStrokeData)
               if (!newCanvas) console.warn('error overlaying stroke')
               return { ...prev, canvas: newCanvas ?? prev.canvas }
@@ -142,8 +133,12 @@ function App() {
       })
     }
 
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => window.removeEventListener('mouseup', handleMouseUp)
+    window.addEventListener('mouseup', endStroke);
+    window.addEventListener('touchend', endStroke);
+    return () => {
+      window.removeEventListener('mouseup', endStroke)
+      window.removeEventListener('touchend', endStroke)
+    }
   }, []);
 
   const getMouseCoords = (event: MouseEvent<HTMLDivElement>) => {
@@ -216,7 +211,17 @@ function App() {
       return
     }
 
+    if (!strokeDown) return
     drawBrush(x, y)
+  }
+
+  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    const { touches } = event
+    setStrokeDown(touches.length === 1)
+  }
+
+  const handleTouchEnd = (_: TouchEvent<HTMLDivElement>) => {
+    setStrokeDown(false)
   }
 
   const drawBrush = (x: number, y: number) => {
@@ -252,13 +257,29 @@ function App() {
       }
     })
 
+    // render stroke on overlay to not affect cavas
+    const overlayCtx = overlayRef.current?.getContext('2d')
+    const { canvas, brushColor, opacity } = canvasData
+
     setStrokeData(strokeData => {
       const updatedData = strokeData.map(row => [...row])
       for (const { x, y } of stroke) {
         updatedData[x][y] = true
+        if (overlayCtx) {
+          overlayCtx.fillStyle = blendColors(canvas[x][y], brushColor, opacity)
+          overlayCtx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE)
+
+          // TODO: show outline of where stroke will be on canvas
+          //overlayCtx.strokeStyle = 'black'
+          //overlayCtx.lineWidth = 1
+          //overlayCtx.strokeRect(
+          //  x * PIXEL_SIZE + 0.5,
+          //  y * PIXEL_SIZE + 0.5,
+          //  PIXEL_SIZE - 1,
+          //  PIXEL_SIZE - 1
+          //)
+        }
       }
-      overlayStrokeData(canvasData, updatedData)
-      console.log('finished overlay')
       return updatedData
     })
   }
@@ -300,7 +321,6 @@ function App() {
   return (
     <>
       <h1>Joy of Painting</h1>
-      <h1>{strokeDown ? 'strokeDown' : 'strokeUp'}</h1>
       <div style={{ position: 'relative', width: CANVAS_SIZE, height: CANVAS_SIZE }}>
         <canvas
           ref={canvasRef}
@@ -333,7 +353,9 @@ function App() {
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
           onMouseDownCapture={handleMouseDown}
+          onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
         />
       </div>
       <br />
