@@ -66,7 +66,59 @@
         </section>
 
         <section class="interface" aria-label="Painting controls">
-          <div class="tool-row" aria-label="Paint controls">
+          <div class="tool-row tool-row--paint-settings"
+            aria-label="Brush and opacity controls">
+            <button
+              type="button"
+              aria-label="Brush size 1"
+              data-attr:aria-pressed="$paint.brushSize === 1 ? 'true' : 'false'"
+              data-on:click="$paint.brushSize = 1"
+            >B1</button>
+            <button
+              type="button"
+              aria-label="Brush size 2"
+              data-attr:aria-pressed="$paint.brushSize === 2 ? 'true' : 'false'"
+              data-on:click="$paint.brushSize = 2"
+            >B2</button>
+            <button
+              type="button"
+              aria-label="Brush size 3"
+              data-attr:aria-pressed="$paint.brushSize === 3 ? 'true' : 'false'"
+              data-on:click="$paint.brushSize = 3"
+            >B3</button>
+            <button
+              type="button"
+              aria-label="Brush size 4"
+              data-attr:aria-pressed="$paint.brushSize === 4 ? 'true' : 'false'"
+              data-on:click="$paint.brushSize = 4"
+            >B4</button>
+            <button
+              type="button"
+              aria-label="25 percent opacity"
+              data-attr:aria-pressed="$paint.opacity === 25 ? 'true' : 'false'"
+              data-on:click="$paint.opacity = 25"
+            >25%</button>
+            <button
+              type="button"
+              aria-label="50 percent opacity"
+              data-attr:aria-pressed="$paint.opacity === 50 ? 'true' : 'false'"
+              data-on:click="$paint.opacity = 50"
+            >50%</button>
+            <button
+              type="button"
+              aria-label="75 percent opacity"
+              data-attr:aria-pressed="$paint.opacity === 75 ? 'true' : 'false'"
+              data-on:click="$paint.opacity = 75"
+            >75%</button>
+            <button
+              type="button"
+              aria-label="100 percent opacity"
+              data-attr:aria-pressed="$paint.opacity === 100 ? 'true' : 'false'"
+              data-on:click="$paint.opacity = 100"
+            >100</button>
+          </div>
+
+          <div class="tool-row tool-row--history" aria-label="Canvas controls">
             <button
               type="button"
               disabled
@@ -78,16 +130,6 @@
               data-on:click="$paint.erase = !$paint.erase"
               data-text="'Erase: ' + ($paint.erase ? 'on' : 'off')"
             >Erase: off</button>
-            <button
-              type="button"
-              data-on:click="$paint.brushSize = $paint.brushSize % 4 + 1"
-              data-text="'Brush: ' + $paint.brushSize"
-            >Brush: 1</button>
-            <button
-              type="button"
-              data-on:click="$paint.opacity = $paint.opacity === 100 ? 75 : $paint.opacity === 75 ? 50 : $paint.opacity === 50 ? 25 : 100"
-              data-text="'Opacity: ' + $paint.opacity + '%'"
-            >Opacity: 100%</button>
           </div>
 
           <paint-palette
