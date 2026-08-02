@@ -153,7 +153,7 @@ class PaintPalette extends HTMLElement {
     this.shadowRoot.replaceChildren();
     const style = document.createElement("style");
     style.textContent = `
-      :host { display: block; width: 100%; }
+      :host { display: block; width: 100%; container-type: inline-size; }
       .palette { display: grid; gap: .5rem; }
       .wells { display: flex; align-items: start; gap: .5rem; min-width: 0; }
       .selected { --well-size: 3.25rem; flex: 0 0 auto; }
@@ -170,6 +170,12 @@ class PaintPalette extends HTMLElement {
         .wells { grid-template-columns: 3rem minmax(0, 1fr); }
         .wells { gap: .25rem; }
         .row { gap: .1875rem; }
+      }
+      @container (max-width: 20rem) {
+        .wells { display: block; }
+        .selected { display: block; margin-block-end: .5rem; }
+        .rows { overflow: visible; padding: 0; }
+        .base { grid-template-columns: repeat(5, 2.5rem); }
       }
     `;
 
@@ -242,14 +248,15 @@ class PaintCanvas extends HTMLElement {
     this.displaySize = CANVAS_WIDTH;
     this.drawScale = 1;
     this.previewAnchor = null;
-    this.resizeObserver = new ResizeObserver(() => this.resize());
+    this.resizeScheduled = false;
+    this.scheduleResize = this.scheduleResize.bind(this);
+    this.resizeObserver = new ResizeObserver(this.scheduleResize);
   }
 
   connectedCallback() {
     this.shadowRoot.innerHTML = `
       <style>
-        :host { display: block; width: 100%; max-width: 24rem; }
-        @media (min-width: 48rem) { :host { max-width: 31rem; } }
+        :host { display: block; width: 100%; }
         .surface { position: relative; width: fit-content; margin-inline: auto; touch-action: none; cursor: crosshair; }
         canvas { position: absolute; inset: 0; display: block; image-rendering: pixelated; }
         .base { position: relative; }
@@ -286,11 +293,17 @@ class PaintCanvas extends HTMLElement {
       (event) => this.onPointerLeave(event),
     );
     this.resizeObserver.observe(this);
+    window.addEventListener("resize", this.scheduleResize);
+    window.visualViewport?.addEventListener("resize", this.scheduleResize);
+    document.addEventListener("fullscreenchange", this.scheduleResize);
     this.resize();
   }
 
   disconnectedCallback() {
     this.resizeObserver.disconnect();
+    window.removeEventListener("resize", this.scheduleResize);
+    window.visualViewport?.removeEventListener("resize", this.scheduleResize);
+    document.removeEventListener("fullscreenchange", this.scheduleResize);
   }
 
   attributeChangedCallback(name, oldValue, newValue) {
@@ -341,14 +354,20 @@ class PaintCanvas extends HTMLElement {
     return this.getAttribute("canvas-id") || "local-prototype";
   }
 
+  scheduleResize() {
+    if (this.resizeScheduled) return;
+    this.resizeScheduled = true;
+    requestAnimationFrame(() => {
+      this.resizeScheduled = false;
+      this.resize();
+    });
+  }
+
   resize() {
     if (!this.surface) return;
-    const maximumCanvasSize = window.matchMedia("(min-width: 48rem)").matches
-      ? 480
-      : 384;
-    const availableWidth = Math.min(
-      Math.max(0, (this.getBoundingClientRect().width || 384) - 16),
-      maximumCanvasSize,
+    const availableWidth = Math.max(
+      0,
+      this.getBoundingClientRect().width || CANVAS_WIDTH,
     );
     const nextCellSize = Math.max(
       1,
@@ -430,12 +449,12 @@ class PaintCanvas extends HTMLElement {
 
   pointForEvent(event) {
     const rect = this.surface.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const x = (event.clientX - rect.left) * this.displaySize / rect.width;
+    const y = (event.clientY - rect.top) * this.displaySize / rect.height;
     return {
       x,
       y,
-      inside: x >= 0 && y >= 0 && x < rect.width && y < rect.height,
+      inside: x >= 0 && y >= 0 && x < this.displaySize && y < this.displaySize,
     };
   }
 
@@ -636,31 +655,5 @@ class PaintCanvas extends HTMLElement {
 customElements.define("mc-color", MCColor);
 customElements.define("paint-palette", PaintPalette);
 customElements.define("paint-canvas", PaintCanvas);
-
-function fitAppToViewport() {
-  const app = document.querySelector(".app");
-  if (!app) return;
-  app.style.setProperty("--app-scale", "1");
-
-  requestAnimationFrame(() => {
-    const viewport = window.visualViewport;
-    const availableWidth = (viewport?.width || window.innerWidth) - 16;
-    const availableHeight = (viewport?.height || window.innerHeight) - 16;
-    const scale = Math.min(
-      1,
-      availableWidth / app.offsetWidth,
-      availableHeight / app.offsetHeight,
-    );
-    app.style.setProperty("--app-scale", String(scale));
-  });
-}
-
-const app = document.querySelector(".app");
-if (app) {
-  new ResizeObserver(fitAppToViewport).observe(app);
-  window.addEventListener("resize", fitAppToViewport);
-  window.visualViewport?.addEventListener("resize", fitAppToViewport);
-  fitAppToViewport();
-}
 
 export { defaultPaletteState };

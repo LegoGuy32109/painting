@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f0e0ae">
     <title>Joy of Painting</title>
     <link rel="stylesheet" href="/style.css">
@@ -47,59 +47,65 @@
         <span class="app-domain">painting.joshhale.me</span>
       </header>
 
-      <paint-canvas
-        canvas-id="local-prototype"
-        data-attr:paint-color="$paint.selection.color || ''"
-        data-attr:brush-size="$paint.brushSize"
-        data-attr:erase="$paint.erase"
-        data-attr:opacity="$paint.opacity"
-        data-attr:tool="$paint.tool"
-        data-attr:undo-request="$paint.undoRequest"
-        data-attr:new-canvas-request="$paint.newCanvasRequest"
-        data-on:undo-availability-changed="$paint.canUndo = evt.detail.canUndo"
-        data-on:color-picked="$paint.selection = { source: 'picked', index: null, color: evt.detail.color }; $paint.tool = 'paint'"
-      ></paint-canvas>
+      <div class="painting-workspace">
+        <section class="painting-stage" aria-label="Painting area">
+          <div class="canvas-zone">
+            <paint-canvas
+              canvas-id="local-prototype"
+              data-attr:paint-color="$paint.selection.color || ''"
+              data-attr:brush-size="$paint.brushSize"
+              data-attr:erase="$paint.erase"
+              data-attr:opacity="$paint.opacity"
+              data-attr:tool="$paint.tool"
+              data-attr:undo-request="$paint.undoRequest"
+              data-attr:new-canvas-request="$paint.newCanvasRequest"
+              data-on:undo-availability-changed="$paint.canUndo = evt.detail.canUndo"
+              data-on:color-picked="$paint.selection = { source: 'picked', index: null, color: evt.detail.color }; $paint.tool = 'paint'"
+            ></paint-canvas>
+          </div>
+        </section>
 
-      <section class="interface" aria-label="Painting controls">
-        <div class="tool-row" aria-label="Paint controls">
-          <button
-            type="button"
-            disabled
-            data-attr:disabled="$paint.canUndo ? null : true"
-            data-on:click="$paint.undoRequest++"
-          >Undo</button>
-          <button
-            type="button"
-            data-on:click="$paint.erase = !$paint.erase"
-            data-text="'Erase: ' + ($paint.erase ? 'on' : 'off')"
-          >Erase: off</button>
-          <button
-            type="button"
-            data-on:click="$paint.brushSize = $paint.brushSize % 4 + 1"
-            data-text="'Brush: ' + $paint.brushSize"
-          >Brush: 1</button>
-          <button
-            type="button"
-            data-on:click="$paint.opacity = $paint.opacity === 100 ? 75 : $paint.opacity === 75 ? 50 : $paint.opacity === 50 ? 25 : 100"
-            data-text="'Opacity: ' + $paint.opacity + '%'"
-          >Opacity: 100%</button>
-        </div>
+        <section class="interface" aria-label="Painting controls">
+          <div class="tool-row" aria-label="Paint controls">
+            <button
+              type="button"
+              disabled
+              data-attr:disabled="$paint.canUndo ? null : true"
+              data-on:click="$paint.undoRequest++"
+            >Undo</button>
+            <button
+              type="button"
+              data-on:click="$paint.erase = !$paint.erase"
+              data-text="'Erase: ' + ($paint.erase ? 'on' : 'off')"
+            >Erase: off</button>
+            <button
+              type="button"
+              data-on:click="$paint.brushSize = $paint.brushSize % 4 + 1"
+              data-text="'Brush: ' + $paint.brushSize"
+            >Brush: 1</button>
+            <button
+              type="button"
+              data-on:click="$paint.opacity = $paint.opacity === 100 ? 75 : $paint.opacity === 75 ? 50 : $paint.opacity === 50 ? 25 : 100"
+              data-text="'Opacity: ' + $paint.opacity + '%'"
+            >Opacity: 100%</button>
+          </div>
 
-        <paint-palette
-          data-attr:palette-state="JSON.stringify($palette)"
-          data-attr:selected-source="$paint.selection.source || ''"
-          data-attr:selected-index="$paint.selection.index === null ? '' : $paint.selection.index"
-          data-attr:selected-color="$paint.selection.color || ''"
-          data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
-        ></paint-palette>
+          <paint-palette
+            data-attr:palette-state="JSON.stringify($palette)"
+            data-attr:selected-source="$paint.selection.source || ''"
+            data-attr:selected-index="$paint.selection.index === null ? '' : $paint.selection.index"
+            data-attr:selected-color="$paint.selection.color || ''"
+            data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
+          ></paint-palette>
 
-        <div class="new-canvas-row">
-          <button
-            type="button"
-            data-on:click="$paint.newCanvasRequest++"
-          >New canvas</button>
-        </div>
-      </section>
+          <div class="new-canvas-row">
+            <button
+              type="button"
+              data-on:click="$paint.newCanvasRequest++"
+            >New canvas</button>
+          </div>
+        </section>
+      </div>
     </main>
   </body>
 </html>
