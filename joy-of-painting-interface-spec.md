@@ -30,22 +30,6 @@ Each type has an opaque and a glass variant.
 - Render small canvas cells at 10 screen pixels each. Render every other
   canvas at 5 screen pixels each.
 
-### Paintable frame
-
-Let the user enable a one-cell frame around the canvas. This produces two rows
-of `width` cells and two columns of `height` cells.
-
-| Canvas | Frame cells |
-| --- | ---: |
-| Small | 64 |
-| Large | 128 |
-| Long | 96 |
-| Tall | 96 |
-
-Store the frame in a separate array. Initialize an opaque frame to `#F9FFFE`.
-Initialize a glass frame to `0x00000000`. A glass frame can be made transparent
-through the normal glass erase action.
-
 ## Base palette
 
 The base palette has 16 fixed wells. A well is unavailable until its matching
@@ -73,7 +57,7 @@ dye does not act as a consumable paint quantity after it is added.
 
 The palette is full only when all 16 wells are available. When it is full,
 enable an eyedropper. The eyedropper samples the exact ARGB color from an
-existing main or frame cell. It is not a free-form color picker.
+existing canvas cell. It is not a free-form color picker.
 
 ## Custom mixing wells
 
@@ -159,8 +143,7 @@ mouse events from blending the same cell more than once in the same stroke.
 
 For size 1 and size 4, anchor the brush at the cell under the cursor. For size
 2 and size 3, anchor it at the nearest grid corner. Do not paint offsets outside
-the main canvas unless the paintable frame is enabled and the offset lands on a
-frame cell.
+the canvas.
 
 ### Opacity
 
@@ -220,8 +203,7 @@ white. A glass canvas has a true clear state.
 - Allow the canvas and palette panels to move independently.
 - Keep their last positions separately for each canvas type.
 - Do not blur the game scene behind the editor.
-- Save up to 16 full undo snapshots. A snapshot contains both main pixels and
-  frame pixels.
+- Save up to 16 full-canvas undo snapshots.
 - On each mouse press over paintable cells, make one snapshot. Discard it if the
   press makes no paint change.
 - `Ctrl+Z` restores the most recent snapshot.
@@ -237,8 +219,6 @@ Canvas {
   type: 0 | 1 | 2 | 3
   glass: boolean
   pixels: Int32[]              // row-major, width * height elements
-  sidesActive: boolean
-  sidePixels: Int32[] | null   // 2 * width + 2 * height elements
   id: string
   version: non-negative integer
   title: string | null
@@ -271,8 +251,6 @@ binary NBT compound with these fields:
 pixels:     int[]       // required
 ct:         byte        // canvas type code, required
 glass:      boolean     // omit when false
-sidesActive:boolean     // include with sidePixels
-sidePixels: int[]       // optional
 title:      string      // include only for signed work
 author:     string      // include only for signed work
 name:       string      // canvas ID, include only for signed work
@@ -287,7 +265,7 @@ contains 1,024 integers.
 ## Synchronization behavior
 
 This is optional in a single-player implementation. For multiplayer, send the
-complete pixel array, frame data, ID, version, and canvas metadata when the
-editor closes. While a player paints on a shared easel, send a full temporary
-update no more often than once every 10 ticks. Accept an update only when the
-sender owns the active easel session and remains within 8 blocks of the easel.
+complete pixel array, ID, version, and canvas metadata when the editor closes.
+While a player paints on a shared easel, send a full temporary update no more
+often than once every 10 ticks. Accept an update only when the sender owns the
+active easel session and remains within 8 blocks of the easel.

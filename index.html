@@ -15,64 +15,61 @@
       <section class="canvas-placeholder"
         aria-label="Painting canvas"></section>
 
-      <section class="tools" aria-label="Painting controls">
-        <div class="brushes" aria-label="Brush sizes">
-          <button class="brush" type="button"
-            aria-label="Tiny brush">🖌️</button>
-          <button class="brush brush--small" type="button"
-            aria-label="Small brush">🖌️</button>
-          <button class="brush brush--medium" type="button"
-            aria-label="Medium brush">🖌️</button>
-          <button class="brush brush--large" type="button"
-            aria-label="Large brush">🖌️</button>
+      <section class="interface" aria-label="Painting controls">
+        <div class="tool-row" aria-label="Paint controls">
+          <button type="button">Undo</button>
+          <button type="button">Erase: off</button>
+          <button type="button">Brush: 1</button>
+          <button type="button">Opacity: 100%</button>
         </div>
 
-        <div class="opacities" aria-label="Brush opacity">
-          <button class="opacity" type="button"
-            aria-label="Full opacity"></button>
-          <button class="opacity opacity--half" type="button"
-            aria-label="Half opacity"></button>
-          <button class="opacity opacity--quarter" type="button"
-            aria-label="Quarter opacity"></button>
-          <button class="opacity opacity--eighth" type="button"
-            aria-label="Eighth opacity"></button>
-        </div>
+        <section class="palette-section" aria-label="Base colors">
+          <div class="base-colors">
+            <label><input type="radio" name="paint-color" aria-label="Black"><mc-color style="--color: var(--mc-black)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Red"><mc-color style="--color: var(--mc-red)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Green"><mc-color style="--color: var(--mc-green)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Brown"><mc-color style="--color: var(--mc-brown)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Blue"><mc-color style="--color: var(--mc-blue)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Purple"><mc-color style="--color: var(--mc-purple)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Cyan"><mc-color style="--color: var(--mc-cyan)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Light gray"><mc-color style="--color: var(--mc-light-gray)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Gray"><mc-color style="--color: var(--mc-gray)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Pink"><mc-color style="--color: var(--mc-pink)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Lime"><mc-color style="--color: var(--mc-lime)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Yellow"><mc-color style="--color: var(--mc-yellow)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Light blue"><mc-color style="--color: var(--mc-light-blue)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Magenta"><mc-color style="--color: var(--mc-magenta)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Orange"><mc-color style="--color: var(--mc-orange)"></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="White"><mc-color style="--color: var(--mc-white)"></mc-color></label>
+          </div>
+        </section>
 
-        <div class="palette" aria-label="Color palette">
-          <button class="color" style="--color: var(--mc-white)" type="button"
-            aria-label="White"></button>
-          <button class="color" style="--color: var(--mc-orange)" type="button"
-            aria-label="Orange"></button>
-          <button class="color" style="--color: var(--mc-magenta)" type="button"
-            aria-label="Magenta"></button>
-          <button class="color" style="--color: var(--mc-light-blue)"
-            type="button"
-            aria-label="Light blue"></button>
-          <button class="color" style="--color: var(--mc-yellow)" type="button"
-            aria-label="Yellow"></button>
-          <button class="color" style="--color: var(--mc-lime)" type="button"
-            aria-label="Lime"></button>
-          <button class="color" style="--color: var(--mc-pink)" type="button"
-            aria-label="Pink"></button>
-          <button class="color" style="--color: var(--mc-gray)" type="button"
-            aria-label="Gray"></button>
-          <button class="color" style="--color: var(--mc-light-gray)"
-            type="button"
-            aria-label="Light gray"></button>
-          <button class="color" style="--color: var(--mc-cyan)" type="button"
-            aria-label="Cyan"></button>
-          <button class="color" style="--color: var(--mc-purple)" type="button"
-            aria-label="Purple"></button>
-          <button class="color" style="--color: var(--mc-blue)" type="button"
-            aria-label="Blue"></button>
-          <button class="color" style="--color: var(--mc-brown)" type="button"
-            aria-label="Brown"></button>
-          <button class="color" style="--color: var(--mc-green)" type="button"
-            aria-label="Green"></button>
-          <button class="color" style="--color: var(--mc-red)" type="button"
-            aria-label="Red"></button>
-          <button class="color" style="--color: var(--mc-black)" type="button"
-            aria-label="Black"></button>
+        <section class="palette-section" aria-label="Custom mixing wells">
+          <div class="mixing-wells">
+            <label><input type="radio" name="paint-color" aria-label="Custom well 1, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 2, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 3, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 4, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 5, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 6, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 7, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 8, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 9, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 10, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 11, empty"><mc-color data-empty></mc-color></label>
+            <label><input type="radio" name="paint-color" aria-label="Custom well 12, empty"><mc-color data-empty></mc-color></label>
+          </div>
+          <div class="palette-actions">
+            <button type="button">Add dye</button>
+            <button type="button" disabled>Picker</button>
+            <button type="button">Water</button>
+          </div>
+        </section>
+
+        <div class="tool-row tool-row--three" aria-label="Canvas controls">
+          <button type="button">Canvas: small</button>
+          <button type="button">Surface: opaque</button>
+          <button type="button">New canvas</button>
         </div>
       </section>
     </main>
