@@ -250,6 +250,7 @@ class PaintCanvas extends HTMLElement {
     this.previewAnchor = null;
     this.resizeScheduled = false;
     this.scheduleResize = this.scheduleResize.bind(this);
+    this.preventSurfaceGesture = this.preventSurfaceGesture.bind(this);
     this.resizeObserver = new ResizeObserver(this.scheduleResize);
   }
 
@@ -292,6 +293,18 @@ class PaintCanvas extends HTMLElement {
       "pointerleave",
       (event) => this.onPointerLeave(event),
     );
+    this.surface.addEventListener("touchstart", this.preventSurfaceGesture, {
+      passive: false,
+    });
+    this.surface.addEventListener("touchmove", this.preventSurfaceGesture, {
+      passive: false,
+    });
+    this.surface.addEventListener("gesturestart", this.preventSurfaceGesture, {
+      passive: false,
+    });
+    this.surface.addEventListener("gesturechange", this.preventSurfaceGesture, {
+      passive: false,
+    });
     this.resizeObserver.observe(this);
     window.addEventListener("resize", this.scheduleResize);
     window.visualViewport?.addEventListener("resize", this.scheduleResize);
@@ -352,6 +365,10 @@ class PaintCanvas extends HTMLElement {
 
   get canvasId() {
     return this.getAttribute("canvas-id") || "local-prototype";
+  }
+
+  preventSurfaceGesture(event) {
+    event.preventDefault();
   }
 
   scheduleResize() {
@@ -472,9 +489,9 @@ class PaintCanvas extends HTMLElement {
     ) return;
     const { point, anchor } = this.anchorForEvent(event);
     if (!point.inside) return;
+    event.preventDefault();
 
     if (this.tool === "picker") {
-      event.preventDefault();
       emit(this, "color-picked", {
         color: argbToHex(this.pixels[anchor.y * CANVAS_WIDTH + anchor.x] ?? 0),
       });
@@ -484,7 +501,6 @@ class PaintCanvas extends HTMLElement {
     }
     if (!this.canPaint) return;
 
-    event.preventDefault();
     this.surface.setPointerCapture(event.pointerId);
     this.stroke = {
       id: crypto.randomUUID(),

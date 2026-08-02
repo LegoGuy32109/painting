@@ -215,8 +215,4 @@ input:focus-visible {
   .app-header {
     gap: 0.5rem;
   }
-
-  .app-domain {
-    font-size: 0.625rem;
-  }
 }
