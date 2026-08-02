@@ -279,7 +279,7 @@ class PaintCanvas extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; width: 100%; max-width: 24rem; }
-        .surface { position: relative; width: fit-content; touch-action: none; cursor: crosshair; }
+        .surface { position: relative; width: fit-content; margin-inline: auto; touch-action: none; cursor: crosshair; }
         canvas { position: absolute; inset: 0; display: block; image-rendering: pixelated; }
         .base { position: relative; }
         .overlay { pointer-events: none; }
@@ -367,9 +367,22 @@ class PaintCanvas extends HTMLElement {
 
   resize() {
     if (!this.surface) return;
-    const available = Math.min(this.getBoundingClientRect().width || 384, 384);
-    this.cellSize = Math.max(1, Math.floor(available / CANVAS_WIDTH));
-    this.displaySize = this.cellSize * CANVAS_WIDTH;
+    const availableWidth = Math.min(
+      Math.max(0, (this.getBoundingClientRect().width || 384) - 16),
+      384,
+    );
+    const nextCellSize = Math.max(
+      1,
+      Math.floor(availableWidth / CANVAS_WIDTH),
+    );
+    const nextDisplaySize = nextCellSize * CANVAS_WIDTH;
+    if (
+      this.cellSize === nextCellSize && this.displaySize === nextDisplaySize &&
+      this.baseCanvas.width > 0
+    ) return;
+
+    this.cellSize = nextCellSize;
+    this.displaySize = nextDisplaySize;
     const deviceCellSize = Math.max(
       1,
       Math.round(this.cellSize * devicePixelRatio),
