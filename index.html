@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <meta name="theme-color" content="#f0e0ae">
     <title>Joy of Painting</title>
     <link rel="stylesheet" href="/style.css">
@@ -42,7 +42,10 @@
         }
       }'
     >
-      <h1 class="title">Joy of Painting</h1>
+      <header class="app-header">
+        <h1 class="title">Joy of Painting</h1>
+        <span class="app-domain">painting.joshhale.me</span>
+      </header>
 
       <paint-canvas
         canvas-id="local-prototype"
@@ -90,9 +93,7 @@
           data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
         ></paint-palette>
 
-        <div class="tool-row tool-row--three" aria-label="Canvas controls">
-          <button type="button" disabled>Canvas: small</button>
-          <button type="button" disabled>Surface: opaque</button>
+        <div class="new-canvas-row">
           <button
             type="button"
             data-on:click="$paint.newCanvasRequest++"

@@ -159,26 +159,17 @@ class PaintPalette extends HTMLElement {
       .selected { --well-size: 3.25rem; flex: 0 0 auto; }
       .rows { display: grid; gap: .375rem; min-width: 0; overflow-x: auto; padding: .125rem; }
       .row { display: grid; gap: .25rem; width: max-content; }
-      .base { grid-template-columns: repeat(16, 2rem); }
-      .custom { grid-template-columns: repeat(12, 2.5rem); }
-      .base mc-color { --well-size: 2rem; cursor: crosshair; }
-      .custom mc-color { --well-size: 2.5rem; }
-      .actions { display: flex; gap: .5rem; }
-      button { min-height: 2.5rem; padding: .5rem .75rem; border: 1px solid var(--border); border-radius: .25rem; background: #fffdf7; color: inherit; font: inherit; touch-action: manipulation; }
-      button:disabled { opacity: .55; }
+      .base { grid-template-columns: repeat(6, 2.5rem); }
+      .base mc-color { --well-size: 2.5rem; cursor: crosshair; }
       @media (max-width: 42rem) {
         .wells { display: grid; grid-template-columns: 3.25rem minmax(0, 1fr); align-items: start; gap: .375rem; }
         .rows { width: 100%; overflow: visible; padding: 0; }
-        .base { grid-template-columns: repeat(8, 2rem); }
-        .custom { grid-template-columns: repeat(6, 2.5rem); }
       }
       @media (max-width: 28rem) {
         .selected { --well-size: 3rem; }
         .wells { grid-template-columns: 3rem minmax(0, 1fr); }
         .wells { gap: .25rem; }
         .row { gap: .1875rem; }
-        .actions { gap: .375rem; }
-        button { min-height: 2.125rem; padding: .375rem .5rem; font-size: .75rem; }
       }
     `;
 
@@ -221,29 +212,8 @@ class PaintPalette extends HTMLElement {
     });
     rows.append(baseRow);
 
-    const customRow = document.createElement("div");
-    customRow.className = "row custom";
-    for (let index = 0; index < 12; index += 1) {
-      const well = document.createElement("mc-color");
-      well.setAttribute("empty", "");
-      well.setAttribute("disabled", "");
-      well.setAttribute("aria-label", `Custom well ${index + 1}, empty`);
-      customRow.append(well);
-    }
-    rows.append(customRow);
     wells.append(rows);
     paletteElement.append(wells);
-
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    for (const label of ["Add dye", "Picker", "Water"]) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.disabled = true;
-      button.textContent = label;
-      actions.append(button);
-    }
-    paletteElement.append(actions);
     this.shadowRoot.append(style, paletteElement);
   }
 }
@@ -279,6 +249,7 @@ class PaintCanvas extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; width: 100%; max-width: 24rem; }
+        @media (min-width: 48rem) { :host { max-width: 31rem; } }
         .surface { position: relative; width: fit-content; margin-inline: auto; touch-action: none; cursor: crosshair; }
         canvas { position: absolute; inset: 0; display: block; image-rendering: pixelated; }
         .base { position: relative; }
@@ -372,9 +343,12 @@ class PaintCanvas extends HTMLElement {
 
   resize() {
     if (!this.surface) return;
+    const maximumCanvasSize = window.matchMedia("(min-width: 48rem)").matches
+      ? 480
+      : 384;
     const availableWidth = Math.min(
       Math.max(0, (this.getBoundingClientRect().width || 384) - 16),
-      384,
+      maximumCanvasSize,
     );
     const nextCellSize = Math.max(
       1,
@@ -662,5 +636,31 @@ class PaintCanvas extends HTMLElement {
 customElements.define("mc-color", MCColor);
 customElements.define("paint-palette", PaintPalette);
 customElements.define("paint-canvas", PaintCanvas);
+
+function fitAppToViewport() {
+  const app = document.querySelector(".app");
+  if (!app) return;
+  app.style.setProperty("--app-scale", "1");
+
+  requestAnimationFrame(() => {
+    const viewport = window.visualViewport;
+    const availableWidth = (viewport?.width || window.innerWidth) - 16;
+    const availableHeight = (viewport?.height || window.innerHeight) - 16;
+    const scale = Math.min(
+      1,
+      availableWidth / app.offsetWidth,
+      availableHeight / app.offsetHeight,
+    );
+    app.style.setProperty("--app-scale", String(scale));
+  });
+}
+
+const app = document.querySelector(".app");
+if (app) {
+  new ResizeObserver(fitAppToViewport).observe(app);
+  window.addEventListener("resize", fitAppToViewport);
+  window.visualViewport?.addEventListener("resize", fitAppToViewport);
+  fitAppToViewport();
+}
 
 export { defaultPaletteState };

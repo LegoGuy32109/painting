@@ -49,10 +49,10 @@ presentational wells and updates itself optimistically before DataStar returns
 the updated attribute as confirmation.
 
 The palette is left aligned: the large selected-color well sits on the left,
-with the 16 base wells in a row to its right and the 12 custom wells in the row
-beneath. The Add dye, Picker, and Water controls stay in their existing row
-below. On narrow screens, controls may wrap and the page may scroll vertically;
-never shrink the canvas to fractional cell sizes.
+with the base wells to its right. The current prototype intentionally hides the
+custom wells and the deferred Add dye, Picker, and Water controls. Restore the
+12 custom wells beneath the base wells and the action row when this phase
+begins.
 
 It emits:
 
