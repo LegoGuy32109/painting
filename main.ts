@@ -14,6 +14,12 @@ export async function handler(req: Request): Promise<Response> {
     });
   }
 
+  if (url.pathname === "/update") {
+    return new Response(`<div id="output">Hello from server land 😲</div>`, {
+      headers: { "content-type": "text/html" },
+    });
+  }
+
   const html = await Deno.readTextFile("./index.html");
 
   return new Response(html, {
