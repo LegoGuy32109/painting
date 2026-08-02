@@ -21,6 +21,13 @@ export async function handler(req: Request): Promise<Response> {
     });
   }
 
+  if (url.pathname === "/app.js" || url.pathname === "/paint-engine.js") {
+    const source = await Deno.readTextFile(`.${url.pathname}`);
+    return new Response(source, {
+      headers: { "content-type": "application/javascript; charset=utf-8" },
+    });
+  }
+
   if (url.pathname === "/Minecraftia-Regular.ttf") {
     const font = await Deno.readFile("./Minecraftia-Regular.ttf");
     return new Response(font, {

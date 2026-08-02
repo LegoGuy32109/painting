@@ -145,6 +145,59 @@ For size 1 and size 4, anchor the brush at the cell under the cursor. For size
 2 and size 3, anchor it at the nearest grid corner. Do not paint offsets outside
 the canvas.
 
+`@` marks the anchor cell. `#` marks another cell painted by the brush. `.` marks
+a cell inside the brush bounding box that the brush does not paint.
+
+```text
+Brush 1
+
+@
+
+
+Brush 2
+
+##
+#@
+
+
+Brush 3
+
+.##.
+####
+##@#
+.##.
+
+
+Brush 4
+
+.###.
+#####
+##@##
+#####
+.###.
+```
+
+### Brush perimeter
+
+When the pointer is over the canvas, draw a dark-gray `#4D4D4D` perimeter around
+the current brush bounding box. The color is fixed. It does not change to keep
+contrast with the canvas below it.
+
+The perimeter is a square bounding box, not an outline of the exact painted
+cells. It therefore includes the unpainted corner cells shown as `.` in the
+brush 3 and brush 4 diagrams.
+
+| Brush size | Perimeter size in cells |
+| ---: | --- |
+| 1 | 1 × 1 |
+| 2 | 2 × 2 |
+| 3 | 4 × 4 |
+| 4 | 5 × 5 |
+
+For a rendered canvas cell size `s`, draw the perimeter at
+`boundingBoxCells × s + 2` pixels in each dimension. The extra two pixels make
+a one-pixel border on every side.
+
 ### Opacity
 
 Provide four brush opacity settings. The original UI uses the mouse wheel over

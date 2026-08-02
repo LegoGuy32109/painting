@@ -7,69 +7,96 @@
     <title>Joy of Painting</title>
     <link rel="stylesheet" href="/style.css">
     <script type="module" src="/datastar.js"></script>
+    <script type="module" src="/app.js"></script>
   </head>
   <body>
-    <main class="app">
+    <main
+      class="app"
+      data-signals='{
+        "paint": {
+          "tool": "paint",
+          "selection": { "source": null, "index": null, "color": null },
+          "brushSize": 1,
+          "opacity": 100,
+          "erase": false,
+          "canUndo": false,
+          "undoRequest": 0,
+          "newCanvasRequest": 0
+        },
+        "palette": {
+          "baseAvailable": [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true],
+          "customWells": [
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 }
+          ]
+        }
+      }'
+    >
       <h1 class="title">Joy of Painting</h1>
 
-      <section class="canvas-placeholder"
-        aria-label="Painting canvas"></section>
+      <paint-canvas
+        canvas-id="local-prototype"
+        data-attr:paint-color="$paint.selection.color || ''"
+        data-attr:brush-size="$paint.brushSize"
+        data-attr:erase="$paint.erase"
+        data-attr:opacity="$paint.opacity"
+        data-attr:tool="$paint.tool"
+        data-attr:undo-request="$paint.undoRequest"
+        data-attr:new-canvas-request="$paint.newCanvasRequest"
+        data-on:undo-availability-changed="$paint.canUndo = evt.detail.canUndo"
+        data-on:color-picked="$paint.selection = { source: 'picked', index: null, color: evt.detail.color }; $paint.tool = 'paint'"
+      ></paint-canvas>
 
       <section class="interface" aria-label="Painting controls">
         <div class="tool-row" aria-label="Paint controls">
-          <button type="button">Undo</button>
-          <button type="button">Erase: off</button>
-          <button type="button">Brush: 1</button>
-          <button type="button">Opacity: 100%</button>
+          <button
+            type="button"
+            disabled
+            data-attr:disabled="$paint.canUndo ? null : true"
+            data-on:click="$paint.undoRequest++"
+          >Undo</button>
+          <button
+            type="button"
+            data-on:click="$paint.erase = !$paint.erase"
+            data-text="'Erase: ' + ($paint.erase ? 'on' : 'off')"
+          >Erase: off</button>
+          <button
+            type="button"
+            data-on:click="$paint.brushSize = $paint.brushSize % 4 + 1"
+            data-text="'Brush: ' + $paint.brushSize"
+          >Brush: 1</button>
+          <button
+            type="button"
+            data-on:click="$paint.opacity = $paint.opacity === 100 ? 75 : $paint.opacity === 75 ? 50 : $paint.opacity === 50 ? 25 : 100"
+            data-text="'Opacity: ' + $paint.opacity + '%'"
+          >Opacity: 100%</button>
         </div>
 
-        <section class="palette-section" aria-label="Base colors">
-          <div class="base-colors">
-            <label><input type="radio" name="paint-color" aria-label="Black"><mc-color style="--color: var(--mc-black)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Red"><mc-color style="--color: var(--mc-red)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Green"><mc-color style="--color: var(--mc-green)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Brown"><mc-color style="--color: var(--mc-brown)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Blue"><mc-color style="--color: var(--mc-blue)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Purple"><mc-color style="--color: var(--mc-purple)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Cyan"><mc-color style="--color: var(--mc-cyan)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Light gray"><mc-color style="--color: var(--mc-light-gray)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Gray"><mc-color style="--color: var(--mc-gray)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Pink"><mc-color style="--color: var(--mc-pink)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Lime"><mc-color style="--color: var(--mc-lime)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Yellow"><mc-color style="--color: var(--mc-yellow)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Light blue"><mc-color style="--color: var(--mc-light-blue)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Magenta"><mc-color style="--color: var(--mc-magenta)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Orange"><mc-color style="--color: var(--mc-orange)"></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="White"><mc-color style="--color: var(--mc-white)"></mc-color></label>
-          </div>
-        </section>
-
-        <section class="palette-section" aria-label="Custom mixing wells">
-          <div class="mixing-wells">
-            <label><input type="radio" name="paint-color" aria-label="Custom well 1, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 2, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 3, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 4, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 5, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 6, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 7, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 8, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 9, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 10, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 11, empty"><mc-color data-empty></mc-color></label>
-            <label><input type="radio" name="paint-color" aria-label="Custom well 12, empty"><mc-color data-empty></mc-color></label>
-          </div>
-          <div class="palette-actions">
-            <button type="button">Add dye</button>
-            <button type="button" disabled>Picker</button>
-            <button type="button">Water</button>
-          </div>
-        </section>
+        <paint-palette
+          data-attr:palette-state="JSON.stringify($palette)"
+          data-attr:selected-source="$paint.selection.source || ''"
+          data-attr:selected-index="$paint.selection.index === null ? '' : $paint.selection.index"
+          data-attr:selected-color="$paint.selection.color || ''"
+          data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
+        ></paint-palette>
 
         <div class="tool-row tool-row--three" aria-label="Canvas controls">
-          <button type="button">Canvas: small</button>
-          <button type="button">Surface: opaque</button>
-          <button type="button">New canvas</button>
+          <button type="button" disabled>Canvas: small</button>
+          <button type="button" disabled>Surface: opaque</button>
+          <button
+            type="button"
+            data-on:click="$paint.newCanvasRequest++"
+          >New canvas</button>
         </div>
       </section>
     </main>
