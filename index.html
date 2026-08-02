@@ -1,19 +1,80 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Data Star Test</title>
-    <!-- <link href="css/style.css" rel="stylesheet"> -->
+    <meta name="theme-color" content="#f0e0ae">
+    <title>Joy of Painting</title>
+    <link rel="stylesheet" href="/style.css">
     <script type="module" src="/datastar.js"></script>
   </head>
   <body>
-    <div>
-      <h1>Data star 🚀</h1>
-      <h2>help</h2>
-      <button data-on:click="console.log('hi')">Click on me pls</button>
-      <button data-on:click="@get('/update')">Open</button>
-      <div id="output"></div>
-    </div>
+    <main class="app">
+      <h1 class="title">Joy of Painting</h1>
+
+      <section class="canvas-placeholder"
+        aria-label="Painting canvas"></section>
+
+      <section class="tools" aria-label="Painting controls">
+        <div class="brushes" aria-label="Brush sizes">
+          <button class="brush" type="button"
+            aria-label="Tiny brush">🖌️</button>
+          <button class="brush brush--small" type="button"
+            aria-label="Small brush">🖌️</button>
+          <button class="brush brush--medium" type="button"
+            aria-label="Medium brush">🖌️</button>
+          <button class="brush brush--large" type="button"
+            aria-label="Large brush">🖌️</button>
+        </div>
+
+        <div class="opacities" aria-label="Brush opacity">
+          <button class="opacity" type="button"
+            aria-label="Full opacity"></button>
+          <button class="opacity opacity--half" type="button"
+            aria-label="Half opacity"></button>
+          <button class="opacity opacity--quarter" type="button"
+            aria-label="Quarter opacity"></button>
+          <button class="opacity opacity--eighth" type="button"
+            aria-label="Eighth opacity"></button>
+        </div>
+
+        <div class="palette" aria-label="Color palette">
+          <button class="color" style="--color: var(--mc-white)" type="button"
+            aria-label="White"></button>
+          <button class="color" style="--color: var(--mc-orange)" type="button"
+            aria-label="Orange"></button>
+          <button class="color" style="--color: var(--mc-magenta)" type="button"
+            aria-label="Magenta"></button>
+          <button class="color" style="--color: var(--mc-light-blue)"
+            type="button"
+            aria-label="Light blue"></button>
+          <button class="color" style="--color: var(--mc-yellow)" type="button"
+            aria-label="Yellow"></button>
+          <button class="color" style="--color: var(--mc-lime)" type="button"
+            aria-label="Lime"></button>
+          <button class="color" style="--color: var(--mc-pink)" type="button"
+            aria-label="Pink"></button>
+          <button class="color" style="--color: var(--mc-gray)" type="button"
+            aria-label="Gray"></button>
+          <button class="color" style="--color: var(--mc-light-gray)"
+            type="button"
+            aria-label="Light gray"></button>
+          <button class="color" style="--color: var(--mc-cyan)" type="button"
+            aria-label="Cyan"></button>
+          <button class="color" style="--color: var(--mc-purple)" type="button"
+            aria-label="Purple"></button>
+          <button class="color" style="--color: var(--mc-blue)" type="button"
+            aria-label="Blue"></button>
+          <button class="color" style="--color: var(--mc-brown)" type="button"
+            aria-label="Brown"></button>
+          <button class="color" style="--color: var(--mc-green)" type="button"
+            aria-label="Green"></button>
+          <button class="color" style="--color: var(--mc-red)" type="button"
+            aria-label="Red"></button>
+          <button class="color" style="--color: var(--mc-black)" type="button"
+            aria-label="Black"></button>
+        </div>
+      </section>
+    </main>
   </body>
 </html>

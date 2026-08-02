@@ -14,6 +14,23 @@ export async function handler(req: Request): Promise<Response> {
     });
   }
 
+  if (url.pathname === "/style.css") {
+    const css = await Deno.readTextFile("./style.css");
+    return new Response(css, {
+      headers: { "content-type": "text/css; charset=utf-8" },
+    });
+  }
+
+  if (url.pathname === "/Minecraftia-Regular.ttf") {
+    const font = await Deno.readFile("./Minecraftia-Regular.ttf");
+    return new Response(font, {
+      headers: {
+        "content-type": "font/ttf",
+        "cache-control": "public, max-age=31536000, immutable",
+      },
+    });
+  }
+
   if (url.pathname === "/update") {
     return new Response(`<div id="output">Hello from server land 😲</div>`, {
       headers: { "content-type": "text/html" },
