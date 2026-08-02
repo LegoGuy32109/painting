@@ -164,7 +164,7 @@ class PaintPalette extends HTMLElement {
       .base mc-color { --well-size: 2rem; cursor: crosshair; }
       .custom mc-color { --well-size: 2.5rem; }
       .actions { display: flex; gap: .5rem; }
-      button { min-height: 2.5rem; padding: .5rem .75rem; border: 1px solid var(--border); border-radius: .25rem; background: #fffdf7; color: inherit; font: inherit; }
+      button { min-height: 2.5rem; padding: .5rem .75rem; border: 1px solid var(--border); border-radius: .25rem; background: #fffdf7; color: inherit; font: inherit; touch-action: manipulation; }
       button:disabled { opacity: .55; }
       @media (max-width: 42rem) {
         .wells { display: grid; grid-template-columns: 3.25rem minmax(0, 1fr); align-items: start; gap: .375rem; }
