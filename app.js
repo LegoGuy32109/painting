@@ -345,6 +345,11 @@ class PaintCanvas extends HTMLElement {
     return Number.isInteger(size) && size >= 1 && size <= 4 ? size : 1;
   }
 
+  get opacity() {
+    const opacity = Number(this.getAttribute("opacity"));
+    return [25, 50, 75, 100].includes(opacity) ? opacity : 100;
+  }
+
   get tool() {
     return this.getAttribute("tool") || "paint";
   }
@@ -501,6 +506,7 @@ class PaintCanvas extends HTMLElement {
       paintedCellCount: 0,
       brushSize: this.brushSize,
       color: this.erase ? OPAQUE_WHITE : this.paintColor,
+      opacity: this.erase ? 100 : this.opacity,
     };
     this.paintAnchor(anchor);
     if (event.pointerType !== "touch") {
@@ -575,6 +581,7 @@ class PaintCanvas extends HTMLElement {
       anchor,
       this.stroke.brushSize,
       this.stroke.color,
+      this.stroke.opacity,
       this.stroke.seen,
     );
     if (changes.length === 0) return;

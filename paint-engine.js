@@ -117,6 +117,37 @@ export function rasterLine(from, to) {
   return cells;
 }
 
+export function blendArgb(existingColor, paintColor, opacityPercent) {
+  if (![25, 50, 75, 100].includes(opacityPercent)) {
+    throw new RangeError("Opacity must be 25, 50, 75, or 100");
+  }
+
+  const paintRed = (paintColor >>> 16) & 0xff;
+  const paintGreen = (paintColor >>> 8) & 0xff;
+  const paintBlue = paintColor & 0xff;
+  const existingRed = (existingColor >>> 16) & 0xff;
+  const existingGreen = (existingColor >>> 8) & 0xff;
+  const existingBlue = existingColor & 0xff;
+  const remainingOpacity = 100 - opacityPercent;
+  const blendChannel = (paint, existing) =>
+    Math.floor(opacityPercent * paint / 100) +
+    Math.floor(remainingOpacity * existing / 100);
+  const red = blendChannel(paintRed, existingRed);
+  const green = blendChannel(paintGreen, existingGreen);
+  const blue = blendChannel(paintBlue, existingBlue);
+  const targetPeak = Math.floor(
+    opacityPercent * Math.max(paintRed, paintGreen, paintBlue) / 100,
+  ) +
+    Math.floor(
+      remainingOpacity * Math.max(existingRed, existingGreen, existingBlue) /
+        100,
+    );
+  const unscaledPeak = Math.max(red, green, blue);
+  const gain = unscaledPeak === 0 ? 0 : Math.floor(targetPeak / unscaledPeak);
+
+  return (0xff000000 | gain * red << 16 | gain * green << 8 | gain * blue) | 0;
+}
+
 export function applyStamp(
   pixels,
   width,
@@ -124,6 +155,7 @@ export function applyStamp(
   anchor,
   brushSize,
   color,
+  opacityPercent,
   seen,
 ) {
   const changes = [];
@@ -134,9 +166,10 @@ export function applyStamp(
     seen.add(index);
 
     const previous = pixels[index];
-    if (previous === color) continue;
-    pixels[index] = color;
-    changes.push({ index, previous, color });
+    const blendedColor = blendArgb(previous, color, opacityPercent);
+    if (previous === blendedColor) continue;
+    pixels[index] = blendedColor;
+    changes.push({ index, previous, color: blendedColor });
   }
 
   return changes;

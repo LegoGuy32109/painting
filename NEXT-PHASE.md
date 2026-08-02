@@ -82,5 +82,5 @@ The page handles those events with DataStar `data-on:*` expressions.
 
 - Account and cross-device palette/tool synchronization.
 - Durable offline outbox behavior.
-- Glass canvases and opacity blending.
+- Glass canvases.
 - Visual drag ghosts, animations, and the moving live-gallery presentation.
