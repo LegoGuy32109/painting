@@ -103,7 +103,6 @@ class MCColor extends HTMLElement {
           inline-size: 100%; block-size: 100%; border: 1px solid rgb(29 29 33 / 45%);
           border-radius: .125rem; background: var(--well-color, ${EMPTY_WELL});
         }
-        :host([selected]) .well { outline: .1875rem solid var(--mc-blue); outline-offset: .125rem; }
         :host([disabled]) .well { opacity: .55; }
       </style>
       <div class="well"></div>
@@ -176,45 +175,19 @@ class PaintPalette extends HTMLElement {
     style.textContent = `
       :host { display: block; width: 100%; container-type: inline-size; }
       .palette { display: grid; gap: .5rem; }
-      .wells { display: flex; align-items: start; gap: .5rem; min-width: 0; }
-      .selected { --well-size: 3.25rem; flex: 0 0 auto; }
-      .rows { display: grid; gap: .375rem; min-width: 0; overflow-x: auto; padding: .125rem; }
+      .rows { display: grid; gap: .5rem; min-width: 0; }
       .row { display: grid; gap: .25rem; width: max-content; }
       .base { grid-template-columns: repeat(6, 2.5rem); }
+      .custom { grid-template-columns: repeat(6, 2.5rem); }
       .base mc-color { --well-size: 2.5rem; cursor: crosshair; }
-      @media (max-width: 42rem) {
-        .wells { display: grid; grid-template-columns: 3.25rem minmax(0, 1fr); align-items: start; gap: .375rem; }
-        .rows { width: 100%; overflow: visible; padding: 0; }
-      }
-      @media (max-width: 28rem) {
-        .selected { --well-size: 3rem; }
-        .wells { grid-template-columns: 3rem minmax(0, 1fr); }
-        .wells { gap: .25rem; }
-        .row { gap: .1875rem; }
-      }
-      @container (max-width: 20rem) {
-        .wells { display: block; }
-        .selected { display: block; margin-block-end: .5rem; }
-        .rows { overflow: visible; padding: 0; }
-        .base { grid-template-columns: repeat(5, 2.5rem); }
+      .custom mc-color { --well-size: 2.5rem; }
+      @container (min-width: 23rem) {
+        .base { grid-template-columns: repeat(8, 2.5rem); }
       }
     `;
 
     const paletteElement = document.createElement("div");
     paletteElement.className = "palette";
-    const wells = document.createElement("div");
-    wells.className = "wells";
-
-    const selected = document.createElement("mc-color");
-    selected.className = "selected";
-    if (selection.color) {
-      selected.setAttribute("color", selection.color);
-      selected.setAttribute("selected", "");
-    } else {
-      selected.setAttribute("empty", "");
-    }
-    wells.append(selected);
-
     const rows = document.createElement("div");
     rows.className = "rows";
     const baseRow = document.createElement("div");
@@ -239,8 +212,20 @@ class PaintPalette extends HTMLElement {
     });
     rows.append(baseRow);
 
-    wells.append(rows);
-    paletteElement.append(wells);
+    const customRow = document.createElement("div");
+    customRow.className = "row custom";
+    palette.customWells.forEach((well, index) => {
+      const customWell = document.createElement("mc-color");
+      customWell.setAttribute("empty", "");
+      customWell.setAttribute("aria-label", `Custom color ${index + 1}, empty`);
+      if (well.numberOfColors > 0) {
+        customWell.removeAttribute("empty");
+      }
+      customRow.append(customWell);
+    });
+    rows.append(customRow);
+
+    paletteElement.append(rows);
     this.root.append(style, paletteElement);
   }
 }
