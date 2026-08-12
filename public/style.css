@@ -100,9 +100,10 @@ input:focus-visible {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  width: 100%;
-  min-height: 1.25rem;
+  position: absolute;
+  inset: 0.125rem clamp(1rem, 4vw, 1.5rem) auto;
   gap: 0.5rem;
+  z-index: 1;
 }
 
 .title,
@@ -144,8 +145,8 @@ input:focus-visible {
 
 .canvas-zone {
   display: grid;
-  grid-template-rows: auto 1fr;
   place-items: center;
+  position: relative;
   width: 100%;
   max-width: calc(100dvh - 4rem);
   min-width: 0;
@@ -159,8 +160,7 @@ input:focus-visible {
 }
 
 .canvas-zone > paint-canvas {
-  width: calc(100% - 2rem);
-  align-self: start;
+  width: 100%;
 }
 
 .interface {
