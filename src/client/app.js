@@ -212,6 +212,9 @@ class PaintPalette extends HTMLElement {
       active: false,
       target: null,
       ghost: null,
+      frame: 0,
+      x: event.clientX,
+      y: event.clientY,
     };
     sourceElement.setPointerCapture?.(event.pointerId);
   }
@@ -261,22 +264,24 @@ class PaintPalette extends HTMLElement {
       }
     });
     const ghost = document.createElement("div");
-    ghost.style.cssText = `position:fixed; z-index:10; width:2.5rem; height:2.5rem; border:1px solid #8b7144; border-radius:.125rem; pointer-events:none; background:${drag.source === "water" ? "#d9f2ff" : drag.color}; opacity:0; transform:translate(-50%, -50%) scale(.85); transition:opacity 120ms ease, transform 120ms ease, left 160ms ease, top 160ms ease;`;
+    ghost.style.cssText = `position:fixed; z-index:10; top:0; left:0; width:2.5rem; height:2.5rem; border:1px solid #8b7144; border-radius:.125rem; pointer-events:none; will-change:transform; background:${drag.source === "water" ? "#d9f2ff" : drag.color}; opacity:0; transition:opacity 120ms ease;`;
     document.body.append(ghost);
     drag.ghost = ghost;
     this.updateDrag(drag, event);
-    if (!this.prefersReducedMotion()) {
-      requestAnimationFrame(() => {
-        ghost.style.opacity = "0.9";
-        ghost.style.transform = "translate(-50%, -50%) scale(1)";
-      });
-    } else ghost.style.opacity = "0.9";
+    ghost.style.opacity = "0.9";
   }
 
   /** @param {any} drag @param {PointerEvent} event */
   updateDrag(drag, event) {
-    drag.ghost.style.left = `${event.clientX}px`;
-    drag.ghost.style.top = `${event.clientY}px`;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    if (!drag.frame) {
+      drag.frame = requestAnimationFrame(() => {
+        drag.frame = 0;
+        drag.ghost.style.transform =
+          `translate3d(${drag.x}px, ${drag.y}px, 0) translate(-50%, -50%)`;
+      });
+    }
     const target = this.root.elementFromPoint(event.clientX, event.clientY)
       ?.closest("mc-color[data-palette-target]") || null;
     if (target === drag.target) return;
@@ -313,6 +318,7 @@ class PaintPalette extends HTMLElement {
 
   /** @param {any} drag @param {boolean} success */
   finishDrag(drag, success) {
+    if (drag.frame) cancelAnimationFrame(drag.frame);
     this.root.querySelectorAll("[drop-eligible], [drop-target]").forEach((well) => {
       well.removeAttribute("drop-eligible");
       well.removeAttribute("drop-target");
@@ -321,8 +327,8 @@ class PaintPalette extends HTMLElement {
     if (success || this.prefersReducedMotion()) drag.ghost.style.opacity = "0";
     else {
       const sourceBounds = drag.element.getBoundingClientRect();
-      drag.ghost.style.left = `${sourceBounds.left + sourceBounds.width / 2}px`;
-      drag.ghost.style.top = `${sourceBounds.top + sourceBounds.height / 2}px`;
+      drag.ghost.style.transform =
+        `translate3d(${sourceBounds.left + sourceBounds.width / 2}px, ${sourceBounds.top + sourceBounds.height / 2}px, 0) translate(-50%, -50%)`;
     }
     window.setTimeout(() => drag.ghost.remove(), this.prefersReducedMotion() ? 0 : 160);
   }
@@ -352,12 +358,12 @@ class PaintPalette extends HTMLElement {
         -webkit-user-select: none;
         user-select: none;
       }
-      mc-color[drop-eligible] { animation: target-pulse 800ms ease-in-out infinite alternate; }
-      mc-color[drop-target] { transform: scale(1.08); filter: brightness(1.12); }
+      mc-color[drop-eligible] { outline: 1px solid rgb(139 113 68 / 60%); outline-offset: 1px; }
+      mc-color[drop-target] { animation: target-pulse 450ms ease-in-out infinite alternate; }
       mc-color[drop-confirmed] { animation: drop-confirm 300ms ease-out; }
       @keyframes target-pulse { to { filter: brightness(1.08); } }
       @keyframes drop-confirm { 50% { transform: scale(1.12); filter: brightness(1.25); } }
-      @media (prefers-reduced-motion: reduce) { mc-color[drop-eligible] { animation: none; } }
+      @media (prefers-reduced-motion: reduce) { mc-color[drop-target] { animation: none; } }
       @container (min-width: 23rem) {
         .base { grid-template-columns: repeat(8, 2.5rem); }
       }
