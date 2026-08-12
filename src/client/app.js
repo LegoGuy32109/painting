@@ -1,3 +1,17 @@
+// @ts-check
+
+/** @typedef {import("./paint-types.d.ts").PaletteSelection} PaletteSelection */
+/** @typedef {import("./paint-types.d.ts").BrushSize} BrushSize */
+/** @typedef {import("./paint-types.d.ts").OpacityPercent} OpacityPercent */
+/** @typedef {import("./paint-types.d.ts").PaintProgressDetail} PaintProgressDetail */
+/** @typedef {import("./paint-types.d.ts").StrokeCommittedDetail} StrokeCommittedDetail */
+/** @typedef {import("./paint-types.d.ts").UndoAvailabilityDetail} UndoAvailabilityDetail */
+/** @typedef {import("./paint-types.d.ts").ColorPickedDetail} ColorPickedDetail */
+/** @typedef {import("./paint-types.d.ts").Cell} Cell */
+/** @typedef {import("./paint-types.d.ts").PaletteState} PaletteState */
+/** @typedef {import("./paint-types.d.ts").PixelChange} PixelChange */
+/** @typedef {import("./paint-types.d.ts").Stroke} Stroke */
+
 import {
   applyStamp,
   argbToHex,
@@ -33,6 +47,7 @@ const BASE_COLORS = Object.freeze([
 
 const EMPTY_WELL = "#ffece5";
 
+/** @param {EventTarget} element @param {string} name @param {unknown} detail */
 function emit(element, name, detail) {
   element.dispatchEvent(
     new CustomEvent(name, {
@@ -43,6 +58,7 @@ function emit(element, name, detail) {
   );
 }
 
+/** @returns {PaletteState} */
 function defaultPaletteState() {
   return {
     baseAvailable: Array(BASE_COLORS.length).fill(true),
@@ -56,6 +72,7 @@ function defaultPaletteState() {
   };
 }
 
+/** @param {string | null} value @param {unknown} fallback @returns {unknown} */
 function parseJson(value, fallback) {
   try {
     return value ? JSON.parse(value) : fallback;
@@ -64,6 +81,7 @@ function parseJson(value, fallback) {
   }
 }
 
+/** @param {string} name @returns {string} */
 function cssColor(name) {
   return getComputedStyle(document.documentElement)
     .getPropertyValue(`--mc-${name}`)
@@ -77,8 +95,8 @@ class MCColor extends HTMLElement {
 
   constructor() {
     super();
-    this.attachShadow({ mode: "open" });
-    this.shadowRoot.innerHTML = `
+    this.root = this.attachShadow({ mode: "open" });
+    this.root.innerHTML = `
       <style>
         :host { display: block; inline-size: var(--well-size, 2rem); block-size: var(--well-size, 2rem); }
         .well {
@@ -120,7 +138,7 @@ class PaintPalette extends HTMLElement {
 
   constructor() {
     super();
-    this.attachShadow({ mode: "open" });
+    this.root = this.attachShadow({ mode: "open" });
   }
 
   connectedCallback() {
@@ -131,10 +149,13 @@ class PaintPalette extends HTMLElement {
     if (this.isConnected) this.render();
   }
 
+  /** @returns {PaletteSelection} */
   selection() {
     const indexValue = this.getAttribute("selected-index");
     return {
-      source: this.getAttribute("selected-source") || null,
+      source: /** @type {PaletteSelection["source"]} */ (
+        this.getAttribute("selected-source") || null
+      ),
       index: indexValue === null || indexValue === "null"
         ? null
         : Number(indexValue),
@@ -143,14 +164,14 @@ class PaintPalette extends HTMLElement {
   }
 
   render() {
-    const palette = parseJson(
+    const palette = /** @type {PaletteState} */ (parseJson(
       this.getAttribute("palette-state"),
       defaultPaletteState(),
-    );
+    ));
     const selection = this.selection();
     const available = palette.baseAvailable || [];
 
-    this.shadowRoot.replaceChildren();
+    this.root.replaceChildren();
     const style = document.createElement("style");
     style.textContent = `
       :host { display: block; width: 100%; container-type: inline-size; }
@@ -220,7 +241,7 @@ class PaintPalette extends HTMLElement {
 
     wells.append(rows);
     paletteElement.append(wells);
-    this.shadowRoot.append(style, paletteElement);
+    this.root.append(style, paletteElement);
   }
 }
 
@@ -240,10 +261,22 @@ class PaintCanvas extends HTMLElement {
 
   constructor() {
     super();
-    this.attachShadow({ mode: "open" });
+    this.root = this.attachShadow({ mode: "open" });
     this.pixels = createPixels();
+    /** @type {Int32Array[]} */
     this.undoStack = [];
+    /** @type {Stroke | null} */
     this.stroke = null;
+    /** @type {HTMLDivElement} */
+    this.surface = /** @type {HTMLDivElement} */ (/** @type {unknown} */ (null));
+    /** @type {HTMLCanvasElement} */
+    this.baseCanvas = /** @type {HTMLCanvasElement} */ (/** @type {unknown} */ (null));
+    /** @type {HTMLCanvasElement} */
+    this.overlayCanvas = /** @type {HTMLCanvasElement} */ (/** @type {unknown} */ (null));
+    /** @type {CanvasRenderingContext2D} */
+    this.baseContext = /** @type {CanvasRenderingContext2D} */ (/** @type {unknown} */ (null));
+    /** @type {CanvasRenderingContext2D} */
+    this.overlayContext = /** @type {CanvasRenderingContext2D} */ (/** @type {unknown} */ (null));
     this.cellSize = 1;
     this.displaySize = CANVAS_WIDTH;
     this.drawScale = 1;
@@ -255,7 +288,7 @@ class PaintCanvas extends HTMLElement {
   }
 
   connectedCallback() {
-    this.shadowRoot.innerHTML = `
+    this.root.innerHTML = `
       <style>
         :host { display: block; width: 100%; }
         .surface { position: relative; width: fit-content; margin-inline: auto; touch-action: none; cursor: crosshair; }
@@ -268,11 +301,11 @@ class PaintCanvas extends HTMLElement {
         <canvas class="overlay" aria-hidden="true"></canvas>
       </div>
     `;
-    this.surface = this.shadowRoot.querySelector(".surface");
-    this.baseCanvas = this.shadowRoot.querySelector(".base");
-    this.overlayCanvas = this.shadowRoot.querySelector(".overlay");
-    this.baseContext = this.baseCanvas.getContext("2d", { alpha: false });
-    this.overlayContext = this.overlayCanvas.getContext("2d");
+    this.surface = /** @type {HTMLDivElement} */ (this.root.querySelector(".surface"));
+    this.baseCanvas = /** @type {HTMLCanvasElement} */ (this.root.querySelector(".base"));
+    this.overlayCanvas = /** @type {HTMLCanvasElement} */ (this.root.querySelector(".overlay"));
+    this.baseContext = /** @type {CanvasRenderingContext2D} */ (this.baseCanvas.getContext("2d", { alpha: false }));
+    this.overlayContext = /** @type {CanvasRenderingContext2D} */ (this.overlayCanvas.getContext("2d"));
     this.surface.addEventListener(
       "pointerdown",
       (event) => this.onPointerDown(event),
@@ -319,6 +352,7 @@ class PaintCanvas extends HTMLElement {
     document.removeEventListener("fullscreenchange", this.scheduleResize);
   }
 
+  /** @param {string} name @param {string | null} oldValue @param {string | null} newValue */
   attributeChangedCallback(name, oldValue, newValue) {
     if (name === "undo-request" && oldValue !== null && oldValue !== newValue) {
       this.undo();
@@ -337,14 +371,20 @@ class PaintCanvas extends HTMLElement {
     }
   }
 
+  /** @returns {BrushSize} */
   get brushSize() {
     const size = Number(this.getAttribute("brush-size"));
-    return Number.isInteger(size) && size >= 1 && size <= 4 ? size : 1;
+    return Number.isInteger(size) && size >= 1 && size <= 4
+      ? /** @type {BrushSize} */ (size)
+      : 1;
   }
 
+  /** @returns {OpacityPercent} */
   get opacity() {
     const opacity = Number(this.getAttribute("opacity"));
-    return [25, 50, 75, 100].includes(opacity) ? opacity : 100;
+    return [25, 50, 75, 100].includes(opacity)
+      ? /** @type {OpacityPercent} */ (opacity)
+      : 100;
   }
 
   get tool() {
@@ -367,6 +407,7 @@ class PaintCanvas extends HTMLElement {
     return this.getAttribute("canvas-id") || "local-prototype";
   }
 
+  /** @param {Event} event */
   preventSurfaceGesture(event) {
     event.preventDefault();
   }
@@ -419,6 +460,7 @@ class PaintCanvas extends HTMLElement {
     this.renderPreview();
   }
 
+  /** @param {CanvasRenderingContext2D} context */
   configureContext(context) {
     context.setTransform(this.drawScale, 0, 0, this.drawScale, 0, 0);
     context.imageSmoothingEnabled = false;
@@ -433,6 +475,7 @@ class PaintCanvas extends HTMLElement {
     }
   }
 
+  /** @param {number} index @param {number} color */
   drawPixel(index, color) {
     const x = index % CANVAS_WIDTH;
     const y = Math.floor(index / CANVAS_WIDTH);
@@ -464,6 +507,7 @@ class PaintCanvas extends HTMLElement {
     context.fillRect(left + size - 2, top - 1, 1, size);
   }
 
+  /** @param {PointerEvent} event */
   pointForEvent(event) {
     const rect = this.surface.getBoundingClientRect();
     const x = (event.clientX - rect.left) * this.displaySize / rect.width;
@@ -475,6 +519,7 @@ class PaintCanvas extends HTMLElement {
     };
   }
 
+  /** @param {PointerEvent} event @returns {{ point: { x: number, y: number, inside: boolean }, anchor: Cell }} */
   anchorForEvent(event) {
     const point = this.pointForEvent(event);
     return {
@@ -483,6 +528,7 @@ class PaintCanvas extends HTMLElement {
     };
   }
 
+  /** @param {PointerEvent} event */
   onPointerDown(event) {
     if (
       !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)
@@ -514,7 +560,7 @@ class PaintCanvas extends HTMLElement {
       sequence: 0,
       paintedCellCount: 0,
       brushSize: this.brushSize,
-      color: this.erase ? OPAQUE_WHITE : this.paintColor,
+      color: this.erase ? OPAQUE_WHITE : /** @type {number} */ (this.paintColor),
       opacity: this.erase ? 100 : this.opacity,
     };
     this.paintAnchor(anchor);
@@ -524,6 +570,7 @@ class PaintCanvas extends HTMLElement {
     }
   }
 
+  /** @param {PointerEvent} event */
   onPointerMove(event) {
     const { point, anchor } = this.anchorForEvent(event);
     if (this.stroke?.pointerId === event.pointerId) {
@@ -555,6 +602,7 @@ class PaintCanvas extends HTMLElement {
     }
   }
 
+  /** @param {PointerEvent} event */
   onPointerLeave(event) {
     if (this.stroke?.pointerId === event.pointerId) {
       this.stroke.lastAnchor = null;
@@ -563,6 +611,7 @@ class PaintCanvas extends HTMLElement {
     this.renderPreview();
   }
 
+  /** @param {PointerEvent} event */
   onPointerUp(event) {
     if (this.stroke?.pointerId !== event.pointerId) return;
     const { point, anchor } = this.anchorForEvent(event);
@@ -578,34 +627,38 @@ class PaintCanvas extends HTMLElement {
     this.finishStroke();
   }
 
+  /** @param {PointerEvent} event */
   onPointerCancel(event) {
     if (this.stroke?.pointerId === event.pointerId) this.finishStroke();
   }
 
+  /** @param {Cell} anchor */
   paintAnchor(anchor) {
+    const stroke = /** @type {Stroke} */ (this.stroke);
     const changes = applyStamp(
       this.pixels,
       CANVAS_WIDTH,
       CANVAS_HEIGHT,
       anchor,
-      this.stroke.brushSize,
-      this.stroke.color,
-      this.stroke.opacity,
-      this.stroke.seen,
+      stroke.brushSize,
+      stroke.color,
+      stroke.opacity,
+      stroke.seen,
     );
     if (changes.length === 0) return;
-    this.stroke.changed = true;
-    this.stroke.paintedCellCount += changes.length;
+    stroke.changed = true;
+    stroke.paintedCellCount += changes.length;
     for (const change of changes) {
       this.drawPixel(change.index, change.color);
-      this.stroke.pendingCells.push([change.index, change.color]);
+      stroke.pendingCells.push([change.index, change.color]);
     }
     this.scheduleProgress();
   }
 
   scheduleProgress() {
-    if (this.stroke.progressScheduled) return;
-    this.stroke.progressScheduled = true;
+    const stroke = /** @type {Stroke} */ (this.stroke);
+    if (stroke.progressScheduled) return;
+    stroke.progressScheduled = true;
     requestAnimationFrame(() => this.flushProgress());
   }
 

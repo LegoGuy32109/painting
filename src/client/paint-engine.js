@@ -1,7 +1,16 @@
+// @ts-check
+
+/** @typedef {import("./paint-types.d.ts").BrushBounds} BrushBounds */
+/** @typedef {import("./paint-types.d.ts").BrushSize} BrushSize */
+/** @typedef {import("./paint-types.d.ts").Cell} Cell */
+/** @typedef {import("./paint-types.d.ts").OpacityPercent} OpacityPercent */
+/** @typedef {import("./paint-types.d.ts").PixelChange} PixelChange */
+
 export const CANVAS_WIDTH = 16;
 export const CANVAS_HEIGHT = 16;
 export const OPAQUE_WHITE = 0xfff9fffe | 0;
 
+/** @type {Readonly<Record<BrushSize, readonly number[][]>>} */
 export const BRUSH_OFFSETS = Object.freeze({
   1: Object.freeze([[0, 0]]),
   2: Object.freeze([[0, 0], [-1, 0], [0, -1], [-1, -1]]),
@@ -44,6 +53,7 @@ export const BRUSH_OFFSETS = Object.freeze({
   ]),
 });
 
+/** @type {Readonly<Record<BrushSize, Readonly<BrushBounds>>>} */
 export const BRUSH_BOUNDS = Object.freeze({
   1: Object.freeze({ minX: 0, minY: 0, size: 1 }),
   2: Object.freeze({ minX: -1, minY: -1, size: 2 }),
@@ -51,6 +61,12 @@ export const BRUSH_BOUNDS = Object.freeze({
   4: Object.freeze({ minX: -2, minY: -2, size: 5 }),
 });
 
+/**
+ * @param {number} [width]
+ * @param {number} [height]
+ * @param {number} [color]
+ * @returns {Int32Array}
+ */
 export function createPixels(
   width = CANVAS_WIDTH,
   height = CANVAS_HEIGHT,
@@ -59,14 +75,23 @@ export function createPixels(
   return new Int32Array(width * height).fill(color);
 }
 
+/** @param {number} x @param {number} y @param {number} width */
 export function cellIndex(x, y, width) {
   return y * width + x;
 }
 
+/** @param {number} position @param {number} cellSize */
 export function cellUnderPointer(position, cellSize) {
   return Math.floor(position / cellSize);
 }
 
+/**
+ * @param {number} x
+ * @param {number} y
+ * @param {number} cellSize
+ * @param {BrushSize} brushSize
+ * @returns {Cell}
+ */
 export function brushAnchor(x, y, cellSize, brushSize) {
   if (brushSize === 2 || brushSize === 3) {
     return {
@@ -81,6 +106,13 @@ export function brushAnchor(x, y, cellSize, brushSize) {
   };
 }
 
+/**
+ * @param {Cell} anchor
+ * @param {BrushSize} brushSize
+ * @param {number} width
+ * @param {number} height
+ * @returns {Cell[]}
+ */
 export function cellsForStamp(anchor, brushSize, width, height) {
   return BRUSH_OFFSETS[brushSize]
     .map(([offsetX, offsetY]) => ({
@@ -90,6 +122,7 @@ export function cellsForStamp(anchor, brushSize, width, height) {
     .filter(({ x, y }) => x >= 0 && y >= 0 && x < width && y < height);
 }
 
+/** @param {Cell} from @param {Cell} to @returns {Cell[]} */
 export function rasterLine(from, to) {
   const cells = [];
   let x = from.x;
@@ -117,6 +150,12 @@ export function rasterLine(from, to) {
   return cells;
 }
 
+/**
+ * @param {number} existingColor
+ * @param {number} paintColor
+ * @param {OpacityPercent} opacityPercent
+ * @returns {number}
+ */
 export function blendArgb(existingColor, paintColor, opacityPercent) {
   if (![25, 50, 75, 100].includes(opacityPercent)) {
     throw new RangeError("Opacity must be 25, 50, 75, or 100");
@@ -129,6 +168,7 @@ export function blendArgb(existingColor, paintColor, opacityPercent) {
   const existingGreen = (existingColor >>> 8) & 0xff;
   const existingBlue = existingColor & 0xff;
   const remainingOpacity = 100 - opacityPercent;
+  /** @param {number} paint @param {number} existing */
   const blendChannel = (paint, existing) =>
     Math.floor(opacityPercent * paint / 100) +
     Math.floor(remainingOpacity * existing / 100);
@@ -148,6 +188,17 @@ export function blendArgb(existingColor, paintColor, opacityPercent) {
   return (0xff000000 | gain * red << 16 | gain * green << 8 | gain * blue) | 0;
 }
 
+/**
+ * @param {Int32Array} pixels
+ * @param {number} width
+ * @param {number} height
+ * @param {Cell} anchor
+ * @param {BrushSize} brushSize
+ * @param {number} color
+ * @param {OpacityPercent} opacityPercent
+ * @param {Set<number>} seen
+ * @returns {PixelChange[]}
+ */
 export function applyStamp(
   pixels,
   width,
@@ -175,18 +226,21 @@ export function applyStamp(
   return changes;
 }
 
+/** @param {string} hex @returns {number | null} */
 export function hexToArgb(hex) {
   const value = hex.startsWith("#") ? hex.slice(1) : hex;
   if (!/^[0-9a-f]{6}$/i.test(value)) return null;
   return (0xff000000 | Number.parseInt(value, 16)) | 0;
 }
 
+/** @param {number} argb @returns {string} */
 export function argbToHex(argb) {
   const alpha = (argb >>> 24) & 0xff;
   if (alpha === 0) return "#000000";
   return `#${(argb >>> 0).toString(16).slice(2).padStart(6, "0")}`;
 }
 
+/** @param {Int32Array} pixels @returns {Int32Array} */
 export function copyPixels(pixels) {
   return new Int32Array(pixels);
 }

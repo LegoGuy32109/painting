@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { handler } from "./main.ts";
+import { handler } from "../src/server/main.ts";
 
 Deno.test("returns html on /", async () => {
   const res = await handler(new Request("http://localhost/"));
