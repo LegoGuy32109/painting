@@ -140,11 +140,9 @@ class PaintPalette extends HTMLElement {
     this.root = this.attachShadow({ mode: "open" });
     /** @type {any} */
     this.drag = null;
-    this.suppressClick = false;
     this.onPointerDown = this.onPointerDown.bind(this);
     this.onPointerMove = this.onPointerMove.bind(this);
     this.onPointerEnd = this.onPointerEnd.bind(this);
-    this.onClick = this.onClick.bind(this);
   }
 
   connectedCallback() {
@@ -153,7 +151,6 @@ class PaintPalette extends HTMLElement {
     document.addEventListener("pointermove", this.onPointerMove);
     document.addEventListener("pointerup", this.onPointerEnd);
     document.addEventListener("pointercancel", this.onPointerEnd);
-    document.addEventListener("click", this.onClick, true);
   }
 
   disconnectedCallback() {
@@ -161,7 +158,6 @@ class PaintPalette extends HTMLElement {
     document.removeEventListener("pointermove", this.onPointerMove);
     document.removeEventListener("pointerup", this.onPointerEnd);
     document.removeEventListener("pointercancel", this.onPointerEnd);
-    document.removeEventListener("click", this.onClick, true);
   }
 
   attributeChangedCallback() {
@@ -237,19 +233,10 @@ class PaintPalette extends HTMLElement {
     this.drag = null;
     drag.element.releasePointerCapture?.(event.pointerId);
     if (!drag.active) return;
-    this.suppressClick = true;
     const targetIndex = drag.target ? Number(drag.target.dataset.paletteIndex) : -1;
     const valid = targetIndex >= 0 && !(drag.source === "custom" && drag.sourceIndex === targetIndex);
     if (valid) this.commitDrop(drag, targetIndex);
     this.finishDrag(drag, valid);
-  }
-
-  /** @param {MouseEvent} event */
-  onClick(event) {
-    if (!this.suppressClick) return;
-    this.suppressClick = false;
-    event.preventDefault();
-    event.stopImmediatePropagation();
   }
 
   /** @param {any} drag @param {PointerEvent} event */
