@@ -13,6 +13,10 @@
   },
   "deploy": {
     "org": "legoguy32109",
-    "app": "painting"
+    "app": "painting",
+    "runtime": {
+      "type": "dynamic",
+      "entrypoint": "src/server/main.ts"
+    }
   }
 }
