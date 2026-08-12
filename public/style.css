@@ -109,8 +109,8 @@ input:focus-visible {
 .title,
 .app-domain {
   margin: 0;
-  padding-top: 2px;
   font-size: clamp(0.5rem, 2vw, 0.5rem);
+  padding-top: 1px;
   font-weight: 400;
   line-height: 1.2;
 }
