@@ -152,7 +152,7 @@ input:focus-visible {
   max-width: calc(100dvh - 4rem);
   min-width: 0;
   aspect-ratio: 1;
-  padding: clamp(0.75rem, calc(4vw - 4px), 1.25rem);
+  padding: clamp(0.5rem, calc(4vw - 8px), 1rem);
   background: rgb(255 248 229 / 35%);
   touch-action: none;
   user-select: none;
