@@ -144,7 +144,8 @@ input:focus-visible {
 
 .canvas-zone {
   display: grid;
-  place-items: stretch;
+  grid-template-rows: auto 1fr;
+  place-items: center;
   width: 100%;
   max-width: calc(100dvh - 4rem);
   min-width: 0;
@@ -157,17 +158,7 @@ input:focus-visible {
   -webkit-touch-callout: none;
 }
 
-.canvas-panel {
-  display: grid;
-  grid-template-rows: auto 1fr;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  padding: 0.5rem;
-  background: var(--mc-white);
-}
-
-.canvas-panel > paint-canvas {
+.canvas-zone > paint-canvas {
   width: calc(100% - 2rem);
   align-self: start;
 }
