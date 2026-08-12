@@ -104,8 +104,6 @@ class MCColor extends HTMLElement {
           border-radius: .125rem; background: var(--well-color, ${EMPTY_WELL_COLOR});
         }
         :host([disabled]) .well { opacity: .55; }
-        :host([selected]) .well { outline: .1875rem solid var(--mc-blue, #3c44aa); outline-offset: .125rem; }
-        :host(:focus-visible) .well { outline: .1875rem solid var(--mc-blue, #3c44aa); outline-offset: .125rem; }
       </style>
       <div class="well"></div>
     `;
@@ -347,8 +345,13 @@ class PaintPalette extends HTMLElement {
       .row { display: grid; gap: .25rem; width: max-content; }
       .base { grid-template-columns: repeat(6, 2.5rem); }
       .custom { grid-template-columns: repeat(6, 2.5rem); }
-      .base mc-color { --well-size: 2.5rem; cursor: crosshair; }
-      .custom mc-color { --well-size: 2.5rem; cursor: crosshair; }
+      .base mc-color, .custom mc-color {
+        --well-size: 2.5rem;
+        cursor: crosshair;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+      }
       mc-color[drop-eligible] { animation: target-pulse 800ms ease-in-out infinite alternate; }
       mc-color[drop-target] { transform: scale(1.08); filter: brightness(1.12); }
       mc-color[drop-confirmed] { animation: drop-confirm 300ms ease-out; }
