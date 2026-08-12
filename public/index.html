@@ -42,26 +42,27 @@
         }
       }'
     >
-      <header class="app-header">
-        <h1 class="title">Joy of Painting</h1>
-        <span class="app-domain">paint.joshhale.me</span>
-      </header>
-
       <div class="painting-workspace">
         <section class="painting-stage" aria-label="Painting area">
           <div class="canvas-zone">
-            <paint-canvas
-              canvas-id="local-prototype"
-              data-attr:paint-color="$paint.selection.color || ''"
-              data-attr:brush-size="$paint.brushSize"
-              data-attr:erase="$paint.erase"
-              data-attr:opacity="$paint.opacity"
-              data-attr:tool="$paint.tool"
-              data-attr:undo-request="$paint.undoRequest"
-              data-attr:new-canvas-request="$paint.newCanvasRequest"
-              data-on:undo-availability-changed="$paint.canUndo = evt.detail.canUndo"
-              data-on:color-picked="$paint.selection = { source: 'picked', index: null, color: evt.detail.color }; $paint.tool = 'paint'"
-            ></paint-canvas>
+            <div class="canvas-panel">
+              <header class="canvas-header">
+                <h1 class="title">Joy of Painting</h1>
+                <span class="app-domain">paint.joshhale.me</span>
+              </header>
+              <paint-canvas
+                canvas-id="local-prototype"
+                data-attr:paint-color="$paint.selection.color || ''"
+                data-attr:brush-size="$paint.brushSize"
+                data-attr:erase="$paint.erase"
+                data-attr:opacity="$paint.opacity"
+                data-attr:tool="$paint.tool"
+                data-attr:undo-request="$paint.undoRequest"
+                data-attr:new-canvas-request="$paint.newCanvasRequest"
+                data-on:undo-availability-changed="$paint.canUndo = evt.detail.canUndo"
+                data-on:color-picked="$paint.selection = { source: 'picked', index: null, color: evt.detail.color }; $paint.tool = 'paint'"
+              ></paint-canvas>
+            </div>
           </div>
         </section>
 
