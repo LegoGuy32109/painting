@@ -16,7 +16,7 @@
     "app": "painting",
     "runtime": {
       "type": "dynamic",
-      "entrypoint": "./src/server/main.ts"
+      "entrypoint": "./src/main.ts"
     }
   }
 }
