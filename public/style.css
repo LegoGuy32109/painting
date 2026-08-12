@@ -199,6 +199,11 @@ input:focus-visible {
   --well-size: 100%;
   min-width: 0;
   min-height: 2.5rem;
+  touch-action: none;
+}
+
+[data-palette-source="water"] {
+  touch-action: none;
 }
 
 .new-canvas-row {

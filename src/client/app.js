@@ -9,6 +9,7 @@
 /** @typedef {import("./paint-types.d.ts").ColorPickedDetail} ColorPickedDetail */
 /** @typedef {import("./paint-types.d.ts").Cell} Cell */
 /** @typedef {import("./paint-types.d.ts").PaletteState} PaletteState */
+/** @typedef {import("./paint-types.d.ts").PaletteStateChangedDetail} PaletteStateChangedDetail */
 /** @typedef {import("./paint-types.d.ts").PixelChange} PixelChange */
 /** @typedef {import("./paint-types.d.ts").Stroke} Stroke */
 
@@ -25,6 +26,13 @@ import {
   OPAQUE_WHITE,
   rasterLine,
 } from "./paint-engine.js";
+import {
+  addColorToWell,
+  colorFromWell,
+  clearWell,
+  EMPTY_WELL_COLOR,
+  emptyWell,
+} from "./palette-engine.js";
 
 const BASE_COLORS = Object.freeze([
   "black",
@@ -45,8 +53,6 @@ const BASE_COLORS = Object.freeze([
   "white",
 ]);
 
-const EMPTY_WELL = "#ffece5";
-
 /** @param {EventTarget} element @param {string} name @param {unknown} detail */
 function emit(element, name, detail) {
   element.dispatchEvent(
@@ -62,13 +68,7 @@ function emit(element, name, detail) {
 function defaultPaletteState() {
   return {
     baseAvailable: Array(BASE_COLORS.length).fill(true),
-    customWells: Array.from({ length: 12 }, () => ({
-      totalRed: 0,
-      totalGreen: 0,
-      totalBlue: 0,
-      totalMaximum: 0,
-      numberOfColors: 0,
-    })),
+    customWells: Array.from({ length: 12 }, emptyWell),
   };
 }
 
@@ -101,9 +101,11 @@ class MCColor extends HTMLElement {
         :host { display: block; inline-size: var(--well-size, 2rem); block-size: var(--well-size, 2rem); }
         .well {
           inline-size: 100%; block-size: 100%; border: 1px solid rgb(29 29 33 / 45%);
-          border-radius: .125rem; background: var(--well-color, ${EMPTY_WELL});
+          border-radius: .125rem; background: var(--well-color, ${EMPTY_WELL_COLOR});
         }
         :host([disabled]) .well { opacity: .55; }
+        :host([selected]) .well { outline: .1875rem solid var(--mc-blue, #3c44aa); outline-offset: .125rem; }
+        :host(:focus-visible) .well { outline: .1875rem solid var(--mc-blue, #3c44aa); outline-offset: .125rem; }
       </style>
       <div class="well"></div>
     `;
@@ -119,8 +121,8 @@ class MCColor extends HTMLElement {
 
   render() {
     const color = this.hasAttribute("empty")
-      ? EMPTY_WELL
-      : this.getAttribute("color") || EMPTY_WELL;
+      ? EMPTY_WELL_COLOR
+      : this.getAttribute("color") || EMPTY_WELL_COLOR;
     this.style.setProperty("--well-color", color);
   }
 }
@@ -138,10 +140,30 @@ class PaintPalette extends HTMLElement {
   constructor() {
     super();
     this.root = this.attachShadow({ mode: "open" });
+    /** @type {any} */
+    this.drag = null;
+    this.suppressClick = false;
+    this.onPointerDown = this.onPointerDown.bind(this);
+    this.onPointerMove = this.onPointerMove.bind(this);
+    this.onPointerEnd = this.onPointerEnd.bind(this);
+    this.onClick = this.onClick.bind(this);
   }
 
   connectedCallback() {
     this.render();
+    document.addEventListener("pointerdown", this.onPointerDown);
+    document.addEventListener("pointermove", this.onPointerMove);
+    document.addEventListener("pointerup", this.onPointerEnd);
+    document.addEventListener("pointercancel", this.onPointerEnd);
+    document.addEventListener("click", this.onClick, true);
+  }
+
+  disconnectedCallback() {
+    document.removeEventListener("pointerdown", this.onPointerDown);
+    document.removeEventListener("pointermove", this.onPointerMove);
+    document.removeEventListener("pointerup", this.onPointerEnd);
+    document.removeEventListener("pointercancel", this.onPointerEnd);
+    document.removeEventListener("click", this.onClick, true);
   }
 
   attributeChangedCallback() {
@@ -162,11 +184,157 @@ class PaintPalette extends HTMLElement {
     };
   }
 
-  render() {
-    const palette = /** @type {PaletteState} */ (parseJson(
+  /** @returns {PaletteState} */
+  palette() {
+    return /** @type {PaletteState} */ (parseJson(
       this.getAttribute("palette-state"),
       defaultPaletteState(),
     ));
+  }
+
+  /** @param {PointerEvent} event */
+  onPointerDown(event) {
+    if (event.button !== 0 || this.drag) return;
+    const sourceElement = event.composedPath().find((node) =>
+      node instanceof HTMLElement && node.dataset.paletteSource
+    );
+    if (!(sourceElement instanceof HTMLElement) || sourceElement.hasAttribute("disabled")) return;
+    const source = sourceElement.dataset.paletteSource;
+    const color = sourceElement.dataset.paletteColor ||
+      sourceElement.getAttribute("color");
+    if (source !== "water" && !color) return;
+    this.drag = {
+      pointerId: event.pointerId,
+      originX: event.clientX,
+      originY: event.clientY,
+      source: source || "",
+      sourceIndex: Number(sourceElement.dataset.paletteIndex),
+      color,
+      element: sourceElement,
+      active: false,
+      target: null,
+      ghost: null,
+    };
+    sourceElement.setPointerCapture?.(event.pointerId);
+  }
+
+  /** @param {PointerEvent} event */
+  onPointerMove(event) {
+    const drag = this.drag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(event.clientX - drag.originX, event.clientY - drag.originY);
+    if (!drag.active && distance < 6) return;
+    if (!drag.active) this.startDrag(drag, event);
+    event.preventDefault();
+    this.updateDrag(drag, event);
+  }
+
+  /** @param {PointerEvent} event */
+  onPointerEnd(event) {
+    const drag = this.drag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    this.drag = null;
+    drag.element.releasePointerCapture?.(event.pointerId);
+    if (!drag.active) return;
+    this.suppressClick = true;
+    const targetIndex = drag.target ? Number(drag.target.dataset.paletteIndex) : -1;
+    const valid = targetIndex >= 0 && !(drag.source === "custom" && drag.sourceIndex === targetIndex);
+    if (valid) this.commitDrop(drag, targetIndex);
+    this.finishDrag(drag, valid);
+  }
+
+  /** @param {MouseEvent} event */
+  onClick(event) {
+    if (!this.suppressClick) return;
+    this.suppressClick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  /** @param {any} drag @param {PointerEvent} event */
+  startDrag(drag, event) {
+    drag.active = true;
+    this.root.querySelectorAll("mc-color[data-palette-target]").forEach((well) => {
+      if (
+        well instanceof HTMLElement &&
+        (drag.source !== "custom" || well.dataset.paletteIndex !== String(drag.sourceIndex))
+      ) {
+        well.setAttribute("drop-eligible", "");
+      }
+    });
+    const ghost = document.createElement("div");
+    ghost.style.cssText = `position:fixed; z-index:10; width:2.5rem; height:2.5rem; border:1px solid #8b7144; border-radius:.125rem; pointer-events:none; background:${drag.source === "water" ? "#d9f2ff" : drag.color}; opacity:0; transform:translate(-50%, -50%) scale(.85); transition:opacity 120ms ease, transform 120ms ease, left 160ms ease, top 160ms ease;`;
+    document.body.append(ghost);
+    drag.ghost = ghost;
+    this.updateDrag(drag, event);
+    if (!this.prefersReducedMotion()) {
+      requestAnimationFrame(() => {
+        ghost.style.opacity = "0.9";
+        ghost.style.transform = "translate(-50%, -50%) scale(1)";
+      });
+    } else ghost.style.opacity = "0.9";
+  }
+
+  /** @param {any} drag @param {PointerEvent} event */
+  updateDrag(drag, event) {
+    drag.ghost.style.left = `${event.clientX}px`;
+    drag.ghost.style.top = `${event.clientY}px`;
+    const target = this.root.elementFromPoint(event.clientX, event.clientY)
+      ?.closest("mc-color[data-palette-target]") || null;
+    if (target === drag.target) return;
+    drag.target?.removeAttribute("drop-target");
+    drag.target = target;
+    target?.setAttribute("drop-target", "");
+  }
+
+  /** @param {any} drag @param {number} targetIndex */
+  commitDrop(drag, targetIndex) {
+    this.confirmedTarget = targetIndex;
+    window.setTimeout(() => {
+      this.confirmedTarget = null;
+      if (this.isConnected) this.render();
+    }, this.prefersReducedMotion() ? 0 : 300);
+    const palette = this.palette();
+    const customWells = palette.customWells.map((well, index) => {
+      if (index !== targetIndex) return { ...well };
+      return drag.source === "water" ? clearWell(well) : addColorToWell(well, drag.color);
+    });
+    const nextPalette = { baseAvailable: [...palette.baseAvailable], customWells };
+    const selection = this.selection();
+    /** @type {PaletteSelection} */
+    let nextSelection = selection;
+    if (selection.source === "custom" && selection.index === targetIndex) {
+      nextSelection = customWells[targetIndex].numberOfColors === 0
+        ? { source: null, index: null, color: null }
+        : { source: "custom", index: targetIndex, color: colorFromWell(customWells[targetIndex]) };
+    }
+    /** @type {PaletteStateChangedDetail} */
+    const detail = { palette: nextPalette, selection: nextSelection };
+    emit(this, "palette-state-changed", detail);
+  }
+
+  /** @param {any} drag @param {boolean} success */
+  finishDrag(drag, success) {
+    this.root.querySelectorAll("[drop-eligible], [drop-target]").forEach((well) => {
+      well.removeAttribute("drop-eligible");
+      well.removeAttribute("drop-target");
+    });
+    if (!drag.ghost) return;
+    if (success || this.prefersReducedMotion()) drag.ghost.style.opacity = "0";
+    else {
+      const sourceBounds = drag.element.getBoundingClientRect();
+      drag.ghost.style.left = `${sourceBounds.left + sourceBounds.width / 2}px`;
+      drag.ghost.style.top = `${sourceBounds.top + sourceBounds.height / 2}px`;
+    }
+    window.setTimeout(() => drag.ghost.remove(), this.prefersReducedMotion() ? 0 : 160);
+  }
+
+  prefersReducedMotion() {
+    return matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  render() {
+    const palette = this.palette();
     const selection = this.selection();
     const available = palette.baseAvailable || [];
 
@@ -180,7 +348,13 @@ class PaintPalette extends HTMLElement {
       .base { grid-template-columns: repeat(6, 2.5rem); }
       .custom { grid-template-columns: repeat(6, 2.5rem); }
       .base mc-color { --well-size: 2.5rem; cursor: crosshair; }
-      .custom mc-color { --well-size: 2.5rem; }
+      .custom mc-color { --well-size: 2.5rem; cursor: crosshair; }
+      mc-color[drop-eligible] { animation: target-pulse 800ms ease-in-out infinite alternate; }
+      mc-color[drop-target] { transform: scale(1.08); filter: brightness(1.12); }
+      mc-color[drop-confirmed] { animation: drop-confirm 300ms ease-out; }
+      @keyframes target-pulse { to { filter: brightness(1.08); } }
+      @keyframes drop-confirm { 50% { transform: scale(1.12); filter: brightness(1.25); } }
+      @media (prefers-reduced-motion: reduce) { mc-color[drop-eligible] { animation: none; } }
       @container (min-width: 23rem) {
         .base { grid-template-columns: repeat(8, 2.5rem); }
       }
@@ -194,9 +368,17 @@ class PaintPalette extends HTMLElement {
     baseRow.className = "row base";
     BASE_COLORS.forEach((name, index) => {
       const well = document.createElement("mc-color");
+      well.dataset.paletteSource = "base";
+      well.dataset.paletteIndex = String(index);
+      well.dataset.paletteColor = cssColor(name);
+      well.setAttribute("role", "button");
       well.setAttribute("color", cssColor(name));
       well.setAttribute("aria-label", name);
-      if (!available[index]) well.setAttribute("disabled", "");
+      if (!available[index]) {
+        well.setAttribute("disabled", "");
+        well.setAttribute("aria-disabled", "true");
+        well.tabIndex = -1;
+      } else well.tabIndex = 0;
       if (selection.source === "base" && selection.index === index) {
         well.setAttribute("selected", "");
       }
@@ -208,6 +390,12 @@ class PaintPalette extends HTMLElement {
           color: cssColor(name),
         });
       });
+      well.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          well.click();
+        }
+      });
       baseRow.append(well);
     });
     rows.append(baseRow);
@@ -216,11 +404,40 @@ class PaintPalette extends HTMLElement {
     customRow.className = "row custom";
     palette.customWells.forEach((well, index) => {
       const customWell = document.createElement("mc-color");
-      customWell.setAttribute("empty", "");
-      customWell.setAttribute("aria-label", `Custom color ${index + 1}, empty`);
-      if (well.numberOfColors > 0) {
-        customWell.removeAttribute("empty");
+      customWell.dataset.paletteTarget = "";
+      customWell.dataset.paletteIndex = String(index);
+      const empty = well.numberOfColors === 0;
+      const color = colorFromWell(well);
+      if (empty) customWell.setAttribute("empty", "");
+      else {
+        customWell.setAttribute("color", color);
+        customWell.dataset.paletteSource = "custom";
+        customWell.dataset.paletteColor = color;
+        customWell.setAttribute("role", "button");
+        customWell.tabIndex = 0;
       }
+      customWell.setAttribute(
+        "aria-label",
+        empty ? `Custom color ${index + 1}, empty` : `Custom color ${index + 1}`,
+      );
+      if (selection.source === "custom" && selection.index === index) {
+        customWell.setAttribute("selected", "");
+      }
+      if (this.confirmedTarget === index) customWell.setAttribute("drop-confirmed", "");
+      customWell.addEventListener("click", () => {
+        if (empty) return;
+        emit(this, "palette-color-selected", {
+          source: "custom",
+          index,
+          color,
+        });
+      });
+      customWell.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          customWell.click();
+        }
+      });
       customRow.append(customWell);
     });
     rows.append(customRow);

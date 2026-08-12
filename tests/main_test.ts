@@ -21,7 +21,7 @@ Deno.test("returns the stylesheet", async () => {
 });
 
 Deno.test("returns the browser modules", async () => {
-  for (const path of ["/app.js", "/paint-engine.js"]) {
+  for (const path of ["/app.js", "/paint-engine.js", "/palette-engine.js"]) {
     const res = await handler(new Request(`http://localhost${path}`));
     assertEquals(
       res.headers.get("content-type"),

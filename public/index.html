@@ -134,6 +134,7 @@
             <mc-color
               class="selected-color"
               aria-label="Selected paint color"
+              data-palette-source="selected"
               data-attr:color="$paint.selection.color || ''"
             ></mc-color>
             <button
@@ -146,8 +147,8 @@
             <button
               type="button"
               class="action-tile"
-              aria-label="Water: coming soon"
-              disabled
+              aria-label="Water: drag onto a custom color"
+              data-palette-source="water"
             >H2O</button>
             <button
               type="button"
@@ -163,6 +164,7 @@
             data-attr:selected-index="$paint.selection.index === null ? '' : $paint.selection.index"
             data-attr:selected-color="$paint.selection.color || ''"
             data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
+            data-on:palette-state-changed="$palette = evt.detail.palette; $paint.selection = evt.detail.selection"
           ></paint-palette>
 
         </section>
