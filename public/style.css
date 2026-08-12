@@ -176,7 +176,8 @@ input:focus-visible {
 }
 
 .tool-row--paint-settings {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, 3rem);
+  justify-content: center;
 }
 
 .tool-row--paint-settings > button {
