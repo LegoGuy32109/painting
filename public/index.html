@@ -42,14 +42,13 @@
         }
       }'
     >
-      <header class="app-header">
-        <h1 class="title">Joy of Painting</h1>
-        <span class="app-domain">paint.joshhale.me</span>
-      </header>
-
       <div class="painting-workspace">
         <section class="painting-stage" aria-label="Painting area">
           <div class="canvas-zone">
+            <header class="canvas-header">
+              <h1 class="title">Joy of Painting</h1>
+              <span class="app-domain">paint.joshhale.me</span>
+            </header>
             <paint-canvas
               canvas-id="local-prototype"
               data-attr:paint-color="$paint.selection.color || ''"
@@ -121,15 +120,42 @@
           <div class="tool-row tool-row--history" aria-label="Canvas controls">
             <button
               type="button"
+              class="action-wide"
               disabled
               data-attr:disabled="$paint.canUndo ? null : true"
               data-on:click="$paint.undoRequest++"
             >Undo</button>
             <button
               type="button"
+              class="action-wide"
               data-on:click="$paint.erase = !$paint.erase"
               data-text="'Erase: ' + ($paint.erase ? 'on' : 'off')"
             >Erase: off</button>
+            <mc-color
+              class="selected-color"
+              aria-label="Selected paint color"
+              data-palette-source="selected"
+              data-attr:color="$paint.selection.color || ''"
+            ></mc-color>
+            <button
+              type="button"
+              class="action-tile"
+              aria-label="Pick a color from the canvas"
+              data-attr:aria-pressed="$paint.tool === 'picker' ? 'true' : 'false'"
+              data-on:click="$paint.tool = 'picker'"
+            >Pick</button>
+            <button
+              type="button"
+              class="action-tile"
+              aria-label="Water: drag onto a custom color"
+              data-palette-source="water"
+            >H2O</button>
+            <button
+              type="button"
+              class="action-tile"
+              aria-label="Add dye: coming soon"
+              disabled
+            >+</button>
           </div>
 
           <paint-palette
@@ -138,14 +164,9 @@
             data-attr:selected-index="$paint.selection.index === null ? '' : $paint.selection.index"
             data-attr:selected-color="$paint.selection.color || ''"
             data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
+            data-on:palette-state-changed="$palette = evt.detail.palette; $paint.selection = evt.detail.selection"
           ></paint-palette>
 
-          <div class="new-canvas-row">
-            <button
-              type="button"
-              data-on:click="$paint.newCanvasRequest++"
-            >New canvas</button>
-          </div>
         </section>
       </div>
     </main>

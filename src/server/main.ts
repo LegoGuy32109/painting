@@ -25,7 +25,10 @@ export async function handler(req: Request): Promise<Response> {
     });
   }
 
-  if (url.pathname === "/app.js" || url.pathname === "/paint-engine.js") {
+  if (
+    url.pathname === "/app.js" || url.pathname === "/paint-engine.js" ||
+    url.pathname === "/palette-engine.js"
+  ) {
     const source = await Deno.readTextFile(clientFile(url.pathname.slice(1)));
     return new Response(source, {
       headers: { "content-type": "application/javascript; charset=utf-8" },

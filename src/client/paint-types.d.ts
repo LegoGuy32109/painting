@@ -85,3 +85,8 @@ export interface PaletteState {
   baseAvailable: boolean[];
   customWells: PaletteWell[];
 }
+
+export interface PaletteStateChangedDetail {
+  palette: PaletteState;
+  selection: PaletteSelection;
+}
