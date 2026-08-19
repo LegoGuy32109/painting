@@ -64,6 +64,10 @@ function emit(element, name, detail) {
   );
 }
 
+function randomStrokeId() {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /** @returns {PaletteState} */
 function defaultPaletteState() {
   return {
@@ -747,7 +751,7 @@ class PaintCanvas extends HTMLElement {
 
     this.surface.setPointerCapture(event.pointerId);
     this.stroke = {
-      id: crypto.randomUUID(),
+      id: randomStrokeId(),
       pointerId: event.pointerId,
       seen: new Set(),
       snapshot: copyPixels(this.pixels),
