@@ -259,11 +259,14 @@ class PaintPalette extends HTMLElement {
     if (!drag || drag.pointerId !== event.pointerId) return;
     this.drag = null;
     drag.element.releasePointerCapture?.(event.pointerId);
-    if (!drag.active) return;
-    this.suppressedClickTarget = drag.element;
-    window.setTimeout(() => {
-      this.suppressedClickTarget = null;
-    }, 500);
+    if (!drag.active) {
+      if (event.type === "pointerup") {
+        this.suppressNextClick(drag.element);
+        this.selectDragSource(drag);
+      }
+      return;
+    }
+    this.suppressNextClick(drag.element);
     const targetIndex = drag.target
       ? Number(drag.target.dataset.paletteIndex)
       : -1;
@@ -271,6 +274,39 @@ class PaintPalette extends HTMLElement {
       !(drag.source === "custom" && drag.sourceIndex === targetIndex);
     if (valid) this.commitDrop(drag, targetIndex);
     this.finishDrag(drag, valid);
+  }
+
+  /** @param {HTMLElement} element */
+  suppressNextClick(element) {
+    this.suppressedClickTarget = element;
+    window.setTimeout(() => {
+      if (this.suppressedClickTarget === element) {
+        this.suppressedClickTarget = null;
+      }
+    }, 500);
+  }
+
+  /** @param {any} drag */
+  selectDragSource(drag) {
+    if (drag.source === "base") {
+      const index = drag.sourceIndex;
+      if (!this.palette().baseAvailable[index]) return;
+      emit(this, "palette-color-selected", {
+        source: "base",
+        index,
+        color: drag.color,
+      });
+      return;
+    }
+    if (drag.source !== "custom") return;
+    const index = drag.sourceIndex;
+    const state = this.palette().customWells[index];
+    if (!state || state.numberOfColors === 0) return;
+    emit(this, "palette-color-selected", {
+      source: "custom",
+      index,
+      color: colorFromWell(state),
+    });
   }
 
   /** @param {MouseEvent} event */
