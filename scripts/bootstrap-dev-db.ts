@@ -8,7 +8,7 @@ import { openEnvironmentDatabase, parseDatabaseEnvironment } from "./database-en
 
 const db = await openEnvironmentDatabase(parseDatabaseEnvironment("Development"));
 const existing = await db.execute(
-  "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+  "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__turso_internal_%'",
 );
 if (existing.rows.length > 0) {
   throw new Error("bootstrap-dev-db only initializes a newly recreated empty database");

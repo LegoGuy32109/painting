@@ -60,19 +60,23 @@ if (!target) {
   );
 }
 
+const existing = await trpcClient.query("envVarsContexts.list", { org: ORG, app: APP }) as
+  { id: string; key: string; context_ids: string[] | null }[];
+const current = existing.find((variable) =>
+  variable.key === key &&
+  (variable.context_ids === null || variable.context_ids.includes(target.id))
+);
+const variable = {
+  key,
+  value,
+  is_secret: isSecret,
+  context_ids: current?.context_ids ?? [target.id],
+};
 const result = await trpcClient.mutation("envVarsContexts.updateEnvVars", {
   org: ORG,
-  add: [
-    {
-      app_id: app.id,
-      key,
-      value,
-      is_secret: isSecret,
-      context_ids: [target.id],
-    },
-  ],
-  update: [],
+  add: current ? [] : [{ app_id: app.id, ...variable }],
+  update: current ? [{ id: current.id, ...variable }] : [],
   remove: [],
 });
 
-console.log(`Set ${key} (${contextName}):`, JSON.stringify(result));
+console.log(`${current ? "Updated" : "Set"} ${key} (${contextName}):`, JSON.stringify(result));
