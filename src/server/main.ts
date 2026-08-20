@@ -1,18 +1,27 @@
 import {
   appendEvents,
   type CanvasEventRow,
+  type CanvasRecord,
   type CanvasSummary,
   type Client,
   completeCanvas,
   createDb,
+  deleteCompletedCanvas,
+  deleteGuestDraft,
   ensureCanvas,
   eventAcknowledgments,
   getCanvasAccess,
+  getCompletedCanvas,
+  getGuestDraft,
+  getOrCreateDraft,
   headSequence,
   listActiveCanvases,
+  listGuestCompleted,
+  listRandomCompleted,
   listRecentlyCompleted,
   type NewEvent,
   pullEventsSince,
+  storeCanvasPixels,
 } from "./db.ts";
 import { createPixels } from "../shared/paint-engine.js";
 import { decodeCells } from "../shared/cell-codec.js";
@@ -28,10 +37,18 @@ import {
   HttpError,
   readJsonBody,
   validateCompletion,
+  validateEnsureDraft,
   validatePushEvents,
 } from "./protocol.ts";
 import { consumeGuestMutation } from "./rate-limit.ts";
-import type { PushEventsResponse } from "../shared/paint-types.d.ts";
+import { buildCanvasReplay, MAX_REPLAY_WINDOW_MS } from "./replay.ts";
+import type {
+  DisplayFeedResponse,
+  EnsureDraftResponse,
+  GuestCanvasesResponse,
+  PublicCanvas,
+  PushEventsResponse,
+} from "../shared/paint-types.d.ts";
 
 const publicFile = (path: string) =>
   new URL(`../../public/${path}`, import.meta.url);
@@ -216,6 +233,9 @@ function ensurePolling(canvasId: string): void {
 // when pushes are happening most frequently (mid-stroke). Once this process
 // has confirmed a canvas exists, skip re-asking Turso.
 const ensuredCanvases = new Set<string>();
+let displayFeedCache:
+  | { expiresAt: number; response: DisplayFeedResponse }
+  | null = null;
 
 // Re-check ownership and completion for every mutation. Multiplayer painting
 // isn't a goal here: only the signed guest profile that created a canvas may
@@ -238,6 +258,26 @@ async function withComposedPixels(
       pixels: bytesToBase64(new Uint8Array(composed.buffer)),
     };
   }));
+}
+
+function publicCanvas(canvas: CanvasRecord): PublicCanvas {
+  return {
+    id: canvas.id,
+    title: canvas.title,
+    pixels: bytesToBase64(canvas.pixels),
+    createdAt: canvas.createdAt,
+    lastStrokeAt: canvas.lastStrokeAt,
+    completedAt: canvas.completedAt,
+  };
+}
+
+async function publicDraft(canvas: CanvasRecord): Promise<PublicCanvas> {
+  const { events } = await pullEventsSince(getDb(), canvas.id, 0);
+  const pixels = composeCanvas(events);
+  return {
+    ...publicCanvas(canvas),
+    pixels: bytesToBase64(new Uint8Array(pixels.buffer)),
+  };
 }
 
 /**
@@ -277,6 +317,175 @@ export async function handler(req: Request): Promise<Response> {
 async function route(req: Request): Promise<Response> {
   const url = new URL(req.url);
 
+  const page = new Map([
+    ["/", "index.html"],
+    ["/editor", "editor.html"],
+    ["/editor.html", "editor.html"],
+    ["/display", "display.html"],
+    ["/display.html", "display.html"],
+    ["/collection", "collection.html"],
+    ["/collection.html", "collection.html"],
+  ]).get(url.pathname);
+  if (page && req.method === "GET") {
+    const html = await Deno.readTextFile(publicFile(page));
+    const session = await guestSession(req, true);
+    return withSessionCookie(
+      new Response(html, { headers: htmlHeaders() }),
+      session as NonNullable<typeof session>,
+    );
+  }
+
+  if (url.pathname === "/api/me/canvases" && req.method === "GET") {
+    const session = await guestSession(req, false);
+    if (!session) throw new HttpError(401, "guest session required");
+    const [draft, completed] = await Promise.all([
+      getGuestDraft(getDb(), session.guestId),
+      listGuestCompleted(getDb(), session.guestId),
+    ]);
+    const response: GuestCanvasesResponse = {
+      draft: draft ? await publicDraft(draft) : null,
+      completed: completed.map(publicCanvas),
+    };
+    return Response.json(response, {
+      headers: { "cache-control": "private, no-store" },
+    });
+  }
+
+  if (url.pathname === "/api/me/draft" && req.method === "PUT") {
+    assertSameOrigin(req);
+    const session = await guestSession(req, false);
+    if (!session) throw new HttpError(401, "guest session required");
+    const body = validateEnsureDraft(await readJsonBody(req));
+    if (!consumeGuestMutation(session.guestId)) {
+      return new Response("too many write requests", {
+        status: 429,
+        headers: { "retry-after": "1" },
+      });
+    }
+    const draft = await getOrCreateDraft(
+      getDb(),
+      body.id,
+      session.guestId,
+      blankPixels(),
+      Date.now(),
+    );
+    ensuredCanvases.add(draft.id);
+    const response: EnsureDraftResponse = {
+      draft: await publicDraft(draft),
+      acceptedPreferredId: draft.id === body.id,
+    };
+    return Response.json(response);
+  }
+
+  if (url.pathname === "/api/me/draft" && req.method === "DELETE") {
+    assertSameOrigin(req);
+    const session = await guestSession(req, false);
+    if (!session) throw new HttpError(401, "guest session required");
+    if (!consumeGuestMutation(session.guestId)) {
+      return new Response("too many write requests", {
+        status: 429,
+        headers: { "retry-after": "1" },
+      });
+    }
+    await deleteGuestDraft(getDb(), session.guestId);
+    return new Response(null, { status: 204 });
+  }
+
+  const ownedCanvasMatch = url.pathname.match(
+    /^\/api\/me\/canvases\/([^/]+)$/,
+  );
+  if (ownedCanvasMatch && req.method === "DELETE") {
+    const canvasId = ownedCanvasMatch[1];
+    assertCanvasId(canvasId);
+    assertSameOrigin(req);
+    const session = await guestSession(req, false);
+    if (!session) throw new HttpError(401, "guest session required");
+    if (!consumeGuestMutation(session.guestId)) {
+      return new Response("too many write requests", {
+        status: 429,
+        headers: { "retry-after": "1" },
+      });
+    }
+    const deleted = await deleteCompletedCanvas(
+      getDb(),
+      canvasId,
+      session.guestId,
+    );
+    if (!deleted) {
+      return new Response("completed painting not found", { status: 404 });
+    }
+    ensuredCanvases.delete(canvasId);
+    return new Response(null, { status: 204 });
+  }
+
+  if (url.pathname === "/api/display-feed" && req.method === "GET") {
+    const requested = Number(url.searchParams.get("limit") ?? "8");
+    const limit = Number.isSafeInteger(requested)
+      ? Math.max(1, Math.min(12, requested))
+      : 8;
+    const now = Date.now();
+    if (!displayFeedCache || displayFeedCache.expiresAt <= now) {
+      const [active, completed] = await Promise.all([
+        listActiveCanvases(getDb()),
+        listRandomCompleted(getDb(), 12),
+      ]);
+      displayFeedCache = {
+        expiresAt: now + 2_000,
+        response: {
+          active: (await withComposedPixels(active.slice(0, 12))).map((
+            canvas,
+          ) => ({
+            id: canvas.id,
+            title: canvas.title,
+            pixels: canvas.pixels,
+            createdAt: canvas.createdAt,
+            lastStrokeAt: canvas.lastStrokeAt,
+            completedAt: canvas.completedAt,
+          })),
+          completed: completed.map(publicCanvas),
+        },
+      };
+    }
+    const response: DisplayFeedResponse = {
+      active: displayFeedCache.response.active.slice(0, limit),
+      completed: displayFeedCache.response.completed.slice(0, limit),
+    };
+    return Response.json(response, {
+      headers: {
+        "cache-control": "public, max-age=1, stale-while-revalidate=4",
+      },
+    });
+  }
+
+  const replayMatch = url.pathname.match(/^\/canvases\/([^/]+)\/replay$/);
+  if (replayMatch && req.method === "GET") {
+    const canvasId = replayMatch[1];
+    assertCanvasId(canvasId);
+    const access = await accessOfCanvas(canvasId);
+    if (!access || access.completedAt === null) {
+      return new Response("completed painting not found", { status: 404 });
+    }
+    const completed = await getCompletedCanvas(getDb(), canvasId);
+    if (!completed) {
+      return new Response("completed painting not found", { status: 404 });
+    }
+    const { events } = await pullEventsSince(getDb(), canvasId, 0);
+    return Response.json(
+      buildCanvasReplay(
+        canvasId,
+        completed.title ?? "Untitled",
+        events,
+        MAX_REPLAY_WINDOW_MS,
+      ),
+      {
+        headers: {
+          "cache-control": "public, max-age=3600, stale-while-revalidate=86400",
+          "deno-cdn-cache-control": "public, s-maxage=86400",
+        },
+      },
+    );
+  }
+
   const eventsMatch = url.pathname.match(/^\/canvases\/([^/]+)\/events$/);
   if (eventsMatch && req.method === "POST") {
     const canvasId = eventsMatch[1];
@@ -306,7 +515,17 @@ async function route(req: Request): Promise<Response> {
     }
 
     const access = await accessOfCanvas(canvasId);
-    if (!access || access.ownerId !== session.guestId) {
+    if (!access) {
+      const draft = await getGuestDraft(getDb(), session.guestId);
+      if (draft && draft.id !== canvasId) {
+        return Response.json({
+          error: "draft_conflict",
+          draftId: draft.id,
+        }, { status: 409 });
+      }
+      return new Response("canvas not found", { status: 404 });
+    }
+    if (access.ownerId !== session.guestId) {
       return new Response("forbidden: canvas is owned by a different client", {
         status: 403,
       });
@@ -431,7 +650,15 @@ async function route(req: Request): Promise<Response> {
     if (!completed) {
       return new Response("canvas is already signed", { status: 409 });
     }
-    return Response.json({ ok: true });
+    const { events } = await pullEventsSince(getDb(), canvasId, 0);
+    const pixels = new Uint8Array(composeCanvas(events).buffer);
+    await storeCanvasPixels(getDb(), canvasId, pixels);
+    const record = await getCompletedCanvas(getDb(), canvasId);
+    if (!record) throw new Error("completed canvas disappeared");
+    return Response.json({
+      ok: true,
+      canvas: publicCanvas(record),
+    });
   }
 
   const streamMatch = url.pathname.match(/^\/canvases\/([^/]+)\/stream$/);
@@ -493,8 +720,11 @@ async function route(req: Request): Promise<Response> {
     });
   }
 
-  if (url.pathname === "/style.css") {
-    const css = await Deno.readTextFile(publicFile("style.css"));
+  const stylesheet = url.pathname.match(
+    /^\/(base|style|gallery|collection)\.css$/,
+  );
+  if (stylesheet) {
+    const css = await Deno.readTextFile(publicFile(`${stylesheet[1]}.css`));
     return new Response(css, {
       headers: staticHeaders("text/css; charset=utf-8"),
     });
@@ -502,7 +732,11 @@ async function route(req: Request): Promise<Response> {
 
   if (
     url.pathname === "/app.js" || url.pathname === "/sync.js" ||
-    url.pathname === "/local-db.js" || url.pathname === "/live-replay.js"
+    url.pathname === "/local-db.js" || url.pathname === "/live-replay.js" ||
+    url.pathname === "/site-nav.js" ||
+    url.pathname === "/painting-parade.js" ||
+    url.pathname === "/collection-page.js" ||
+    url.pathname === "/editor-page.js"
   ) {
     const source = await Deno.readTextFile(clientFile(url.pathname.slice(1)));
     return new Response(source, {
@@ -511,7 +745,7 @@ async function route(req: Request): Promise<Response> {
   }
 
   const sharedModule = url.pathname.match(
-    /^\/shared\/(paint-engine|palette-engine|ulid|cell-codec|compose)\.js$/,
+    /^\/shared\/(paint-engine|palette-engine|ulid|cell-codec|compose|pixel-render)\.js$/,
   );
   if (sharedModule) {
     const source = await Deno.readTextFile(sharedFile(`${sharedModule[1]}.js`));
@@ -527,19 +761,17 @@ async function route(req: Request): Promise<Response> {
     });
   }
 
+  if (url.pathname === "/favicon.ico") {
+    return new Response(null, {
+      status: 204,
+      headers: { "cache-control": "public, max-age=86400" },
+    });
+  }
+
   if (url.pathname === "/update") {
     return new Response(`<div id="output">Hello from server land 😲</div>`, {
       headers: { "content-type": "text/html" },
     });
-  }
-
-  if (url.pathname === "/" && req.method === "GET") {
-    const html = await Deno.readTextFile(publicFile("index.html"));
-    const session = await guestSession(req, true);
-    return withSessionCookie(
-      new Response(html, { headers: htmlHeaders() }),
-      session as NonNullable<typeof session>,
-    );
   }
 
   return new Response("not found", { status: 404 });

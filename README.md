@@ -22,6 +22,21 @@ docs/      Product specifications and project notes
 Keep authored runtime code in `src/`, tests in `tests/`, static assets in
 `public/`, and documentation in `docs/`.
 
+## Application routes
+
+- `/` is the landing page with a low-priority ambient painting parade.
+- `/editor` restores or creates the signed guest profile's one draft.
+- `/display` presents active paintings first and fills remaining movement lanes
+  with the final 40 seconds of randomly selected completed paintings.
+- `/collection` lists and deletes the current guest's signed paintings.
+- `/dev/active` and `/dev/completed` retain the unstyled diagnostic views.
+
+Landing and display share `<painting-parade>`. Active canvases consume their
+existing SSE streams. Completed canvases replay a bounded server-built timeline,
+hold their final frame, and are replaced only after their translated card leaves
+the viewport. Guest ownership is derived only from the signed `HttpOnly` cookie;
+JavaScript never receives an owner identifier.
+
 ## Development
 
 ```bash

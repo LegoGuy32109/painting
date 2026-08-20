@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
+  assertCanvasId,
   assertSameOrigin,
   HttpError,
   readJsonBody,
@@ -133,4 +134,9 @@ Deno.test("rejects cross-origin mutations", () => {
       ),
     HttpError,
   );
+});
+
+Deno.test("accepts legacy canvas ids without generating new ones", () => {
+  assertCanvasId("01M0DYMS702WD8ZZ6VSW");
+  assertThrows(() => assertCanvasId("not-a-canvas-id"), HttpError);
 });

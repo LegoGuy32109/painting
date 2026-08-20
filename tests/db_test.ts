@@ -4,6 +4,8 @@ import {
   completeCanvas,
   createCanvas,
   createDb,
+  deleteCompletedCanvas,
+  getOrCreateDraft,
   listActiveCanvases,
   listRecentlyCompleted,
   pullEventsSince,
@@ -25,9 +27,42 @@ function emptyPixels(): Uint8Array {
 
 async function makeCanvas(): Promise<string> {
   const id = ulid();
-  await createCanvas(db, id, TEST_OWNER, emptyPixels(), Date.now());
+  await createCanvas(db, id, `${TEST_OWNER}-${id}`, emptyPixels(), Date.now());
   return id;
 }
+
+Deno.test("one guest can have only one draft", async () => {
+  const owner = `draft-owner-${ulid()}`;
+  const firstId = ulid();
+  const secondId = ulid();
+  try {
+    const [first, second] = await Promise.all([
+      getOrCreateDraft(db, firstId, owner, emptyPixels(), Date.now()),
+      getOrCreateDraft(db, secondId, owner, emptyPixels(), Date.now()),
+    ]);
+    assertEquals(first.id, second.id);
+  } finally {
+    await db.execute({
+      sql: "DELETE FROM canvases WHERE owner_id = ?",
+      args: [owner],
+    });
+  }
+});
+
+Deno.test("only an owner can delete their completed canvas", async () => {
+  const canvasId = await makeCanvas();
+  const access = await db.execute({
+    sql: "SELECT owner_id FROM canvases WHERE id = ?",
+    args: [canvasId],
+  });
+  const owner = String(access.rows[0].owner_id);
+  await completeCanvas(db, canvasId, "Done", Date.now());
+  assertEquals(
+    await deleteCompletedCanvas(db, canvasId, "someone-else"),
+    false,
+  );
+  assertEquals(await deleteCompletedCanvas(db, canvasId, owner), true);
+});
 
 async function dropCanvas(id: string): Promise<void> {
   await db.execute({ sql: "DELETE FROM canvases WHERE id = ?", args: [id] });

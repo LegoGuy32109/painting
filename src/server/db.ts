@@ -48,6 +48,10 @@ export interface CanvasAccess {
   completedAt: number | null;
 }
 
+export interface CanvasRecord extends CanvasSummary {
+  pixels: Uint8Array;
+}
+
 /**
  * A transaction conflict from Turso's MVCC engine (BEGIN CONCURRENT). Confirmed
  * empirically: the losing side's COMMIT fails with a "Transaction error"
@@ -112,6 +116,102 @@ export async function ensureCanvas(
       "VALUES (?, ?, ?, ?, 0)",
     args: [id, ownerId, blankPixels, now],
   });
+}
+
+export async function getOrCreateDraft(
+  db: Client,
+  preferredId: string,
+  ownerId: string,
+  blankPixels: Uint8Array,
+  now: number,
+): Promise<CanvasRecord> {
+  await db.execute({
+    sql:
+      "INSERT OR IGNORE INTO canvases (id, owner_id, pixels, created_at, client_reported_active) " +
+      "VALUES (?, ?, ?, ?, 0)",
+    args: [preferredId, ownerId, blankPixels, now],
+  });
+  const draft = await getGuestDraft(db, ownerId);
+  if (!draft) throw new Error("could not create or recover guest draft");
+  return draft;
+}
+
+export async function getGuestDraft(
+  db: Client,
+  ownerId: string,
+): Promise<CanvasRecord | null> {
+  const result = await db.execute({
+    sql:
+      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at " +
+      "FROM canvases WHERE owner_id = ? AND completed_at IS NULL LIMIT 1",
+    args: [ownerId],
+  });
+  return result.rows.length === 0 ? null : rowToRecord(result.rows[0]);
+}
+
+export async function listGuestCompleted(
+  db: Client,
+  ownerId: string,
+  limit = 200,
+): Promise<CanvasRecord[]> {
+  const result = await db.execute({
+    sql:
+      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at " +
+      "FROM canvases WHERE owner_id = ? AND completed_at IS NOT NULL " +
+      "ORDER BY completed_at DESC LIMIT ?",
+    args: [ownerId, limit],
+  });
+  return result.rows.map(rowToRecord);
+}
+
+export async function listRandomCompleted(
+  db: Client,
+  limit: number,
+): Promise<CanvasRecord[]> {
+  const result = await db.execute({
+    sql:
+      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at " +
+      "FROM canvases WHERE completed_at IS NOT NULL ORDER BY RANDOM() LIMIT ?",
+    args: [limit],
+  });
+  return result.rows.map(rowToRecord);
+}
+
+export async function getCompletedCanvas(
+  db: Client,
+  canvasId: string,
+): Promise<CanvasRecord | null> {
+  const result = await db.execute({
+    sql:
+      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at " +
+      "FROM canvases WHERE id = ? AND completed_at IS NOT NULL",
+    args: [canvasId],
+  });
+  return result.rows.length === 0 ? null : rowToRecord(result.rows[0]);
+}
+
+export async function deleteCompletedCanvas(
+  db: Client,
+  canvasId: string,
+  ownerId: string,
+): Promise<boolean> {
+  const result = await db.execute({
+    sql:
+      "DELETE FROM canvases WHERE id = ? AND owner_id = ? AND completed_at IS NOT NULL",
+    args: [canvasId, ownerId],
+  });
+  return result.rowsAffected === 1;
+}
+
+export async function deleteGuestDraft(
+  db: Client,
+  ownerId: string,
+): Promise<boolean> {
+  const result = await db.execute({
+    sql: "DELETE FROM canvases WHERE owner_id = ? AND completed_at IS NULL",
+    args: [ownerId],
+  });
+  return result.rowsAffected === 1;
 }
 
 /**
@@ -196,6 +296,18 @@ export async function completeCanvas(
   return result.rowsAffected === 1;
 }
 
+export async function storeCanvasPixels(
+  db: Client,
+  canvasId: string,
+  pixels: Uint8Array,
+): Promise<void> {
+  await db.execute({
+    sql:
+      "UPDATE canvases SET pixels = ? WHERE id = ? AND completed_at IS NOT NULL",
+    args: [pixels, canvasId],
+  });
+}
+
 /**
  * "Active" here is server-affirmed, not just the client's self-reported flag:
  * a crashed/closed client can leave client_reported_active=1 behind forever,
@@ -263,6 +375,16 @@ function rowToSummary(row: any): CanvasSummary {
       : Number(row.last_stroke_at),
     clientReportedActive: Number(row.client_reported_active) === 1,
     completedAt: row.completed_at === null ? null : Number(row.completed_at),
+  };
+}
+
+// deno-lint-ignore no-explicit-any
+function rowToRecord(row: any): CanvasRecord {
+  return {
+    ...rowToSummary(row),
+    pixels: row.pixels instanceof Uint8Array
+      ? row.pixels
+      : new Uint8Array(row.pixels),
   };
 }
 

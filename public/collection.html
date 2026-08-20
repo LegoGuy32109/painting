@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f0e0ae">
+    <title>Your Collection · Joy of Painting</title>
+    <link rel="stylesheet" href="/base.css">
+    <link rel="stylesheet" href="/collection.css">
+    <script type="module" src="/site-nav.js"></script>
+  </head>
+  <body>
+    <site-nav></site-nav>
+    <main class="collection-main shell">
+      <header class="collection-heading">
+        <div>
+          <p class="eyebrow">Your signed work</p>
+          <h1 class="page-title">Collection</h1>
+        </div>
+        <a class="pixel-button" href="/editor">Return to canvas</a>
+      </header>
+      <p id="collection-status" role="status"
+        aria-live="polite">Opening your collection</p>
+      <section id="collection-grid" class="collection-grid"
+        aria-label="Signed paintings"></section>
+    </main>
+    <dialog class="pixel-dialog" id="delete-dialog"
+      aria-labelledby="delete-title">
+      <form class="dialog-form" method="dialog" id="delete-form">
+        <p class="eyebrow">Permanent action</p>
+        <h2 id="delete-title">Delete this painting?</h2>
+        <p
+          id="delete-copy">This removes the signed painting and its replay forever.</p>
+        <p class="dialog-status" id="delete-status" role="status"
+          aria-live="polite"></p>
+        <div class="dialog-actions">
+          <button type="button" id="cancel-delete">Keep painting</button>
+          <button type="submit" class="danger-button"
+            id="confirm-delete">Delete forever</button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="/collection-page.js"></script>
+  </body>
+</html>

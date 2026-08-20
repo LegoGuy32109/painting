@@ -5,10 +5,12 @@
 /** @typedef {import("../shared/paint-types.d.ts").UndoCommittedDetail} UndoCommittedDetail */
 /** @typedef {import("../shared/paint-types.d.ts").LocalEventRecord} LocalEventRecord */
 /** @typedef {import("../shared/paint-types.d.ts").PushEventsResponse} PushEventsResponse */
+/** @typedef {import("../shared/paint-types.d.ts").EnsureDraftResponse} EnsureDraftResponse */
 /** @typedef {import("../shared/paint-types.d.ts").SyncStatus} SyncStatus */
 
 import {
   appendLocalEvent,
+  deleteCanvasLocal,
   getFullHistory,
   listPendingLocalEvents,
   markSyncedAndGraduate,
@@ -17,6 +19,7 @@ import {
 import { localUlid } from "../shared/ulid.js";
 import { encodeCells } from "../shared/cell-codec.js";
 import { composeCanvas } from "../shared/compose.js";
+import { decodePixels } from "../shared/pixel-render.js";
 
 const IDLE_TIMEOUT_MS = 30_000;
 const SYNC_INTERVAL_MS = 4_000;
@@ -78,7 +81,11 @@ function bytesToBase64(bytes) {
  */
 export function initSync(canvasElement, onStatus = () => {}) {
   let canvasId = storedValue("currentCanvasId");
-  if (canvasId) canvasElement.setAttribute("canvas-id", canvasId);
+  if (!canvasId) {
+    canvasId = localUlid();
+    storeValue("currentCanvasId", canvasId);
+  }
+  canvasElement.setAttribute("canvas-id", canvasId);
 
   const canvas = /** @type {HTMLElement & {
      *   setReady?: (ready: boolean) => void,
@@ -96,21 +103,71 @@ export function initSync(canvasElement, onStatus = () => {}) {
   /** @type {LocalEventRecord[]} */
   let memoryEvents = [];
   let memoryKey = -1;
+  /** @type {{ localId: string, serverDraft: import("../shared/paint-types.d.ts").PublicCanvas } | null} */
+  let draftConflict = null;
 
   const ready = (async () => {
     const db = await dbPromise;
     let restored = true;
+    let restoredEventCount = 0;
     try {
       if (canvasId && db) {
         const [history, pending] = await Promise.all([
           getFullHistory(db, canvasId),
           listPendingLocalEvents(db, canvasId),
         ]);
+        restoredEventCount = history.length + pending.length;
         canvas.loadPixels?.(composeCanvas([...history, ...pending]));
       }
     } catch (error) {
       restored = false;
       debugTiming("local restore failed", { error: String(error) });
+    }
+
+    try {
+      const preferredId = canvasId;
+      const response = await fetch("/api/me/draft", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: preferredId }),
+      });
+      if (!response.ok) {
+        throw new Error(`draft registration failed: ${response.status}`);
+      }
+      const result = /** @type {EnsureDraftResponse} */ (await response.json());
+      if (result.draft.id !== canvasId) {
+        const pending = db && canvasId
+          ? await listPendingLocalEvents(db, canvasId)
+          : memoryEvents;
+        if (pending.length > 0) {
+          restored = false;
+          draftConflict = {
+            localId: /** @type {string} */ (canvasId),
+            serverDraft: result.draft,
+          };
+          onStatus({
+            kind: "blocked",
+            message: "A saved draft and local changes both need recovery",
+          });
+          window.dispatchEvent(
+            new CustomEvent("draft-conflict", {
+              detail: {
+                localId: canvasId,
+                serverId: result.draft.id,
+              },
+            }),
+          );
+        } else {
+          canvasId = result.draft.id;
+          storeValue("currentCanvasId", canvasId);
+          canvasElement.setAttribute("canvas-id", canvasId);
+          canvas.loadPixels?.(decodePixels(result.draft.pixels));
+        }
+      } else if (restoredEventCount === 0) {
+        canvas.loadPixels?.(decodePixels(result.draft.pixels));
+      }
+    } catch (error) {
+      debugTiming("draft registration unavailable", { error: String(error) });
     }
     canvas.setReady?.(true);
     if (db && restored) {
@@ -485,5 +542,43 @@ export function initSync(canvasElement, onStatus = () => {}) {
   });
   addEventListener("pagehide", sendInactiveBeacon);
 
-  return { sign, ready };
+  /** @param {"server" | "local"} choice */
+  async function resolveDraftConflict(choice) {
+    await ready;
+    if (!draftConflict) return true;
+    const conflict = draftConflict;
+    const db = await dbPromise;
+    if (choice === "server") {
+      if (db) await deleteCanvasLocal(db, conflict.localId);
+      memoryEvents = memoryEvents.filter((event) =>
+        event.canvasId !== conflict.localId
+      );
+      canvasId = conflict.serverDraft.id;
+      storeValue("currentCanvasId", canvasId);
+      canvasElement.setAttribute("canvas-id", canvasId);
+      canvas.loadPixels?.(decodePixels(conflict.serverDraft.pixels));
+      draftConflict = null;
+      syncBlocked = false;
+      onStatus({ kind: "local", message: "Online; saved draft restored" });
+      return true;
+    }
+
+    const removed = await fetch("/api/me/draft", { method: "DELETE" });
+    if (!removed.ok) return false;
+    const registered = await fetch("/api/me/draft", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: conflict.localId }),
+    });
+    if (!registered.ok) return false;
+    canvasId = conflict.localId;
+    storeValue("currentCanvasId", canvasId);
+    canvasElement.setAttribute("canvas-id", canvasId);
+    draftConflict = null;
+    syncBlocked = false;
+    onStatus({ kind: "syncing", message: "Saving recovered local draft" });
+    return await requestDrain(true);
+  }
+
+  return { sign, ready, resolveDraftConflict };
 }

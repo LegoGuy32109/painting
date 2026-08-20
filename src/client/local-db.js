@@ -6,7 +6,7 @@
 /** @typedef {import("../shared/paint-types.d.ts").CanvasHistoryRecord} CanvasHistoryRecord */
 
 const DB_NAME = "painting-local";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 /** @param {IDBRequest} request @returns {Promise<any>} */
 function toPromise(request) {
@@ -20,29 +20,37 @@ function toPromise(request) {
 export function openLocalDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
-
-      db.createObjectStore("canvas_snapshot", { keyPath: "canvasId" });
-
-      const localEvents = db.createObjectStore("local_events", {
-        keyPath: "localKey",
-        autoIncrement: true,
-      });
-      localEvents.createIndex("by_canvas_status", ["canvasId", "status"]);
-
-      const canvasesLocal = db.createObjectStore("canvases_local", {
-        keyPath: "id",
-      });
-      canvasesLocal.createIndex("by_owner_completed", [
-        "ownerId",
-        "completedAt",
-      ]);
-
-      const canvasHistory = db.createObjectStore("canvas_history", {
-        keyPath: ["canvasId", "sequence"],
-      });
-      canvasHistory.createIndex("by_canvas", "canvasId");
+      const oldVersion = event.oldVersion;
+      if (oldVersion < 1) {
+        db.createObjectStore("canvas_snapshot", { keyPath: "canvasId" });
+        const localEvents = db.createObjectStore("local_events", {
+          keyPath: "localKey",
+          autoIncrement: true,
+        });
+        localEvents.createIndex("by_canvas_status", ["canvasId", "status"]);
+        const canvasesLocal = db.createObjectStore("canvases_local", {
+          keyPath: "id",
+        });
+        canvasesLocal.createIndex("by_owner_completed", [
+          "ownerId",
+          "completedAt",
+        ]);
+        const canvasHistory = db.createObjectStore("canvas_history", {
+          keyPath: ["canvasId", "sequence"],
+        });
+        canvasHistory.createIndex("by_canvas", "canvasId");
+      }
+      if (oldVersion < 2) {
+        const canvasesLocal = /** @type {IDBTransaction} */ (
+          request.transaction
+        ).objectStore("canvases_local");
+        if (canvasesLocal.indexNames.contains("by_owner_completed")) {
+          canvasesLocal.deleteIndex("by_owner_completed");
+        }
+        canvasesLocal.createIndex("by_completed", "completedAt");
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -144,14 +152,19 @@ export function upsertCanvasLocal(db, record) {
 
 /** @param {IDBDatabase} db @param {string} ownerId @returns {Promise<CanvasLocalRecord[]>} */
 export function listMyGallery(db, ownerId) {
+  void ownerId;
+  return listCachedCompleted(db);
+}
+
+/** @param {IDBDatabase} db @returns {Promise<CanvasLocalRecord[]>} */
+export function listCachedCompleted(db) {
   return new Promise((resolve, reject) => {
     const index = store(db, "canvases_local", "readonly").index(
-      "by_owner_completed",
+      "by_completed",
     );
-    const range = IDBKeyRange.bound([ownerId, 0], [ownerId, Infinity]);
     /** @type {CanvasLocalRecord[]} */
     const results = [];
-    const request = index.openCursor(range, "prev");
+    const request = index.openCursor(null, "prev");
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) return resolve(results);
@@ -159,6 +172,40 @@ export function listMyGallery(db, ownerId) {
       cursor.continue();
     };
     request.onerror = () => reject(request.error);
+  });
+}
+
+/** @param {IDBDatabase} db @param {string} canvasId */
+export function deleteCanvasLocal(db, canvasId) {
+  const tx = db.transaction(
+    ["canvases_local", "canvas_snapshot", "canvas_history", "local_events"],
+    "readwrite",
+  );
+  tx.objectStore("canvases_local").delete(canvasId);
+  tx.objectStore("canvas_snapshot").delete(canvasId);
+  const history = tx.objectStore("canvas_history").index("by_canvas");
+  history.openKeyCursor(IDBKeyRange.only(canvasId)).onsuccess = (event) => {
+    const cursor = /** @type {IDBRequest} */ (event.target).result;
+    if (cursor) {
+      tx.objectStore("canvas_history").delete(cursor.primaryKey);
+      cursor.continue();
+    }
+  };
+  for (const status of ["pending", "synced"]) {
+    const events = tx.objectStore("local_events").index("by_canvas_status");
+    events.openKeyCursor(IDBKeyRange.only([canvasId, status])).onsuccess = (
+      event,
+    ) => {
+      const cursor = /** @type {IDBRequest} */ (event.target).result;
+      if (cursor) {
+        tx.objectStore("local_events").delete(cursor.primaryKey);
+        cursor.continue();
+      }
+    };
+  }
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve(undefined);
+    tx.onerror = () => reject(tx.error);
   });
 }
 

@@ -7,9 +7,10 @@ import "npm:fake-indexeddb@6.2.5/auto";
 import { assertEquals } from "@std/assert";
 import {
   appendLocalEvent,
+  deleteCanvasLocal,
   getFullHistory,
   getSnapshot,
-  listMyGallery,
+  listCachedCompleted,
   listPendingLocalEvents,
   markSyncedAndGraduate,
   openLocalDb,
@@ -176,14 +177,13 @@ Deno.test("graduation leaves every unacknowledged event pending", async () => {
   db.close();
 });
 
-Deno.test("by_owner_completed lists a gallery newest-completed-first, scoped to the owner", async () => {
+Deno.test("cached completed paintings list newest first without exposing owner ids", async () => {
   const db = await openLocalDb();
   await upsertCanvasLocal(db, {
     id: "p1",
     title: "First",
     completedAt: 100,
     pixels: new Uint8Array(4),
-    ownerId: "owner-x",
     createdAt: 1,
   });
   await upsertCanvasLocal(db, {
@@ -191,19 +191,22 @@ Deno.test("by_owner_completed lists a gallery newest-completed-first, scoped to 
     title: "Second",
     completedAt: 200,
     pixels: new Uint8Array(4),
-    ownerId: "owner-x",
     createdAt: 2,
   });
   await upsertCanvasLocal(db, {
     id: "p3",
-    title: "Someone else's",
+    title: "Third",
     completedAt: 300,
     pixels: new Uint8Array(4),
-    ownerId: "owner-y",
     createdAt: 3,
   });
 
-  const gallery = await listMyGallery(db, "owner-x");
-  assertEquals(gallery.map((c) => c.id), ["p2", "p1"]);
+  const gallery = await listCachedCompleted(db);
+  assertEquals(gallery.map((c) => c.id), ["p3", "p2", "p1"]);
+  await deleteCanvasLocal(db, "p2");
+  assertEquals(
+    (await listCachedCompleted(db)).map((c) => c.id),
+    ["p3", "p1"],
+  );
   db.close();
 });

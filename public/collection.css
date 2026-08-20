@@ -1,0 +1,74 @@
+.collection-main {
+  padding-block: 2rem max(3rem, env(safe-area-inset-bottom));
+}
+
+.collection-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.collection-heading .pixel-button {
+  text-decoration: none;
+}
+
+#collection-status {
+  font: 0.85rem/1.5 ui-monospace, monospace;
+}
+
+.collection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 13rem), 1fr));
+  gap: 1.25rem;
+}
+
+.collection-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+
+.collection-card canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 0.125rem solid var(--border-dark);
+  background: var(--mc-white);
+  image-rendering: pixelated;
+}
+
+.collection-card h2,
+.collection-card p {
+  margin: 0;
+}
+
+.collection-card h2 {
+  overflow: hidden;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-card p {
+  color: var(--mc-brown);
+  font: 0.75rem/1.4 ui-monospace, monospace;
+}
+
+.empty-collection {
+  grid-column: 1 / -1;
+  padding: 2rem;
+  text-align: center;
+}
+
+@media (max-width: 34rem) {
+  .collection-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .collection-heading .pixel-button {
+    text-align: center;
+  }
+}

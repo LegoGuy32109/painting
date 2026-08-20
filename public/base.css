@@ -1,0 +1,214 @@
+@font-face {
+  font-family: "Minecraftia";
+  src: url("/Minecraftia-Regular.ttf") format("truetype");
+  font-display: optional;
+}
+
+:root {
+  --mc-white: #f9fffe;
+  --mc-orange: #f9801d;
+  --mc-magenta: #c74ebd;
+  --mc-light-blue: #3ab3da;
+  --mc-yellow: #fed83d;
+  --mc-lime: #80c71f;
+  --mc-pink: #f38baa;
+  --mc-gray: #474f52;
+  --mc-light-gray: #9d9d97;
+  --mc-cyan: #169c9c;
+  --mc-purple: #8932b8;
+  --mc-blue: #3c44aa;
+  --mc-brown: #835432;
+  --mc-green: #5e7c16;
+  --mc-red: #b02e26;
+  --mc-black: #1d1d21;
+  --sand: #f0e0ae;
+  --paper: #fff8e5;
+  --paper-bright: #fffdf7;
+  --border: #8b7144;
+  --border-dark: #5d482c;
+  --text: #1d1d21;
+  --shadow: #4c391f;
+  color: var(--text);
+  background: var(--sand);
+  font-family: "Minecraftia", ui-monospace, monospace;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: var(--sand);
+}
+
+body {
+  min-width: 0;
+  min-height: 100dvh;
+  margin: 0;
+  overflow-x: clip;
+  background:
+    linear-gradient(rgb(255 255 255 / 8%), transparent 30%),
+    var(--sand);
+}
+
+button,
+input {
+  color: inherit;
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+.shell {
+  width: min(100% - 2rem, 72rem);
+  margin-inline: auto;
+}
+
+.pixel-panel {
+  border: 0.1875rem solid var(--border-dark);
+  border-right-color: #3f301f;
+  border-bottom-color: #3f301f;
+  border-radius: 0;
+  background: var(--paper);
+  box-shadow:
+    inset 0.125rem 0.125rem rgb(255 255 255 / 55%),
+    0.25rem 0.25rem 0 rgb(76 57 31 / 25%);
+}
+
+.pixel-button,
+button {
+  min-height: 2.75rem;
+  padding: 0.625rem 0.875rem;
+  border: 0.125rem solid var(--border-dark);
+  border-right-color: #3f301f;
+  border-bottom-color: #3f301f;
+  border-radius: 0;
+  background: var(--paper-bright);
+  box-shadow: inset 0.125rem 0.125rem rgb(255 255 255 / 65%);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.pixel-button:hover,
+button:hover:not(:disabled) {
+  background: #fff3cf;
+}
+
+.pixel-button:active,
+button:active:not(:disabled) {
+  border-color: #3f301f var(--border-dark) var(--border-dark) #3f301f;
+  box-shadow: inset 0.125rem 0.125rem rgb(76 57 31 / 15%);
+  transform: translate(1px, 1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 0.1875rem solid var(--mc-blue);
+  outline-offset: 0.1875rem;
+}
+
+.page-title {
+  margin: 0;
+  font-size: clamp(1.5rem, 6vw, 3.75rem);
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.eyebrow {
+  margin: 0 0 0.75rem;
+  color: var(--mc-brown);
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+dialog.pixel-dialog {
+  width: min(calc(100% - 2rem), 27rem);
+  padding: 0;
+  border: 0.25rem solid var(--border-dark);
+  border-radius: 0;
+  color: var(--text);
+  background: var(--paper);
+  box-shadow: 0.5rem 0.5rem 0 rgb(0 0 0 / 30%);
+}
+
+dialog.pixel-dialog::backdrop {
+  background: rgb(19 15 10 / 72%);
+  backdrop-filter: blur(1px);
+}
+
+.dialog-form {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.dialog-form h2,
+.dialog-form p {
+  margin: 0;
+}
+
+.dialog-form label {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.dialog-form input {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.625rem;
+  border: 0.1875rem solid var(--border-dark);
+  border-radius: 0;
+  background: #fff;
+}
+
+.dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.danger-button {
+  color: white;
+  border-color: #651b17;
+  background: var(--mc-red);
+}
+
+.dialog-status {
+  min-height: 1.25rem;
+  color: var(--mc-red);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

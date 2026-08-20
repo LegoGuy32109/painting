@@ -55,6 +55,25 @@ function post(path: string, body: unknown, session = SESSION_A) {
   );
 }
 
+function put(path: string, body: unknown, session = SESSION_A) {
+  return handler(
+    new Request(`http://localhost${path}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: cookie(session) },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+function remove(path: string, session = SESSION_A) {
+  return handler(
+    new Request(`http://localhost${path}`, {
+      method: "DELETE",
+      headers: { cookie: cookie(session) },
+    }),
+  );
+}
+
 function get(path: string, session = SESSION_A) {
   return handler(
     new Request(`http://localhost${path}`, {
@@ -62,6 +81,71 @@ function get(path: string, session = SESSION_A) {
     }),
   );
 }
+
+Deno.test("guest draft and completed collection lifecycle is owner scoped", async () => {
+  const preferredId = ulid();
+  const ignoredSecondId = ulid();
+  try {
+    const created = await put("/api/me/draft", { id: preferredId });
+    assertEquals(created.status, 200);
+    const first = await created.json();
+    assertEquals(first.draft.id, preferredId);
+    assertEquals(first.acceptedPreferredId, true);
+
+    const repeated = await put("/api/me/draft", { id: ignoredSecondId });
+    const second = await repeated.json();
+    assertEquals(second.draft.id, preferredId);
+    assertEquals(second.acceptedPreferredId, false);
+
+    await post(`/canvases/${preferredId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[0, -65536]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+    const signed = await post(`/canvases/${preferredId}/complete`, {
+      title: "My Painting",
+    });
+    assertEquals(signed.status, 200);
+
+    const mine = await (await get("/api/me/canvases")).json();
+    assertEquals(mine.draft, null);
+    assertEquals(mine.completed[0].id, preferredId);
+    const someoneElse = await (await get("/api/me/canvases", SESSION_B)).json();
+    assertEquals(someoneElse.completed.length, 0);
+
+    const feed = await (await get("/api/display-feed?limit=12")).json();
+    assertEquals(
+      feed.completed.some((canvas: { id: string }) =>
+        canvas.id === preferredId
+      ),
+      true,
+    );
+    const replayResponse = await get(`/canvases/${preferredId}/replay`);
+    assertEquals(replayResponse.status, 200);
+    const replay = await replayResponse.json();
+    assertEquals(replay.id, preferredId);
+    assertEquals(replay.title, "My Painting");
+    assertEquals(replay.steps.length > 0, true);
+
+    assertEquals(
+      (await remove(`/api/me/canvases/${preferredId}`, SESSION_B)).status,
+      404,
+    );
+    assertEquals(
+      (await remove(`/api/me/canvases/${preferredId}`)).status,
+      204,
+    );
+  } finally {
+    await dropCanvas(preferredId);
+    await dropCanvas(ignoredSecondId);
+  }
+});
 
 Deno.test("push lazily creates the canvas row and appends events", async () => {
   const canvasId = ulid();

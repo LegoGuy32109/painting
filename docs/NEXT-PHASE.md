@@ -1,4 +1,9 @@
-# Next phase: interactive palette and drag feedback
+# Archived phase: interactive palette and drag feedback
+
+This prototype phase is complete. The application now also includes durable
+guest drafts, offline synchronization, public live/replay presentation, signed
+collections, and owner-scoped deletion. Keep this document as the original
+interaction contract rather than a description of unfinished work.
 
 Build this after the first interactive canvas slice (opaque 16×16 painting,
 brushes, erase, undo, reset, and the basic selection bridge) is verified.

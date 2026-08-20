@@ -102,9 +102,11 @@ class MCColor extends HTMLElement {
       <style>
         :host { display: block; inline-size: var(--well-size, 2rem); block-size: var(--well-size, 2rem); }
         .well {
-          inline-size: 100%; block-size: 100%; border: 1px solid rgb(29 29 33 / 45%);
-          border-radius: .125rem; background: var(--well-color, ${EMPTY_WELL_COLOR});
+          inline-size: 100%; block-size: 100%; border: 2px solid rgb(29 29 33 / 55%);
+          border-radius: 0; background: var(--well-color, ${EMPTY_WELL_COLOR});
         }
+        :host([selected]) .well { outline: 3px solid #f9fffe; box-shadow: 0 0 0 5px #3c44aa; }
+        :host(:focus-visible) { outline: 3px solid #3c44aa; outline-offset: 3px; }
         :host([disabled]) .well { opacity: .55; }
       </style>
       <div class="well"></div>

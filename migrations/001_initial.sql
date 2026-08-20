@@ -20,6 +20,9 @@ CREATE INDEX IF NOT EXISTS canvases_completed_idx
 CREATE INDEX IF NOT EXISTS canvases_owner_completed_idx
   ON canvases(owner_id, completed_at DESC) WHERE completed_at IS NOT NULL;
 
+CREATE UNIQUE INDEX IF NOT EXISTS canvases_owner_draft_idx
+  ON canvases(owner_id) WHERE completed_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS canvas_events (
   sequence    INTEGER PRIMARY KEY AUTOINCREMENT,
   id          TEXT NOT NULL UNIQUE,

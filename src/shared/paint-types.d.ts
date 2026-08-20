@@ -123,7 +123,6 @@ export interface CanvasLocalRecord {
   title: string | null;
   completedAt: number | null;
   pixels: Uint8Array;
-  ownerId: string | null;
   createdAt: number;
 }
 
@@ -166,6 +165,57 @@ export interface PushEventsResponse {
 
 export interface CompleteCanvasRequest {
   title: string;
+}
+
+export interface EnsureDraftRequest {
+  id: string;
+}
+
+export interface PublicCanvas {
+  id: string;
+  title: string | null;
+  pixels: string;
+  createdAt: number;
+  lastStrokeAt: number | null;
+  completedAt: number | null;
+}
+
+export interface GuestCanvasesResponse {
+  draft: PublicCanvas | null;
+  completed: PublicCanvas[];
+}
+
+export interface EnsureDraftResponse {
+  draft: PublicCanvas;
+  acceptedPreferredId: boolean;
+}
+
+export interface DisplayFeedResponse {
+  active: PublicCanvas[];
+  completed: PublicCanvas[];
+}
+
+export interface ReplayDiffStep {
+  type: "diff";
+  atMs: number;
+  cells: string;
+}
+
+export interface ReplaySnapshotStep {
+  type: "snapshot";
+  atMs: number;
+  pixels: string;
+}
+
+export type ReplayStep = ReplayDiffStep | ReplaySnapshotStep;
+
+export interface CanvasReplayResponse {
+  id: string;
+  title: string;
+  initialPixels: string;
+  finalPixels: string;
+  durationMs: number;
+  steps: ReplayStep[];
 }
 
 export type SyncStatusKind =

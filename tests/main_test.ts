@@ -15,6 +15,15 @@ Deno.test("returns html on /", async () => {
   assertEquals(body.includes("Joy of Painting"), true);
 });
 
+Deno.test("serves each public page and establishes a guest profile", async () => {
+  for (const path of ["/editor", "/display", "/collection"]) {
+    const response = await handler(new Request(`http://localhost${path}`));
+    assertEquals(response.status, 200);
+    assertEquals(response.headers.get("content-type"), "text/html");
+    assertMatch(response.headers.get("set-cookie") ?? "", /^painting_guest=/);
+  }
+});
+
 Deno.test("returns the Minecraft font", async () => {
   const res = await handler(
     new Request("http://localhost/Minecraftia-Regular.ttf"),
@@ -82,7 +91,12 @@ Deno.test("returns the browser modules", async () => {
       "/app.js",
       "/shared/paint-engine.js",
       "/shared/palette-engine.js",
+      "/shared/pixel-render.js",
       "/live-replay.js",
+      "/site-nav.js",
+      "/painting-parade.js",
+      "/collection-page.js",
+      "/editor-page.js",
     ]
   ) {
     const res = await handler(new Request(`http://localhost${path}`));
