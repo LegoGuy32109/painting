@@ -3,6 +3,7 @@
     "dev": "deno run -A --env-file src/server/main.ts",
     "check": "deno check src tests scripts",
     "test": "deno test --allow-read=public,src/client --ignore=tests/db_test.ts,tests/sync-routes_test.ts tests",
+    "test:replay": "deno test --allow-read=src/client tests/live-replay_test.js",
     "test:db": "deno test --allow-net --allow-env --allow-read tests/db_test.ts",
     "test:routes": "deno test --allow-net --allow-env --allow-read tests/sync-routes_test.ts",
     "test:e2e": "deno run --allow-net --allow-env --allow-read --allow-run scripts/ephemeral-test-db.ts",
@@ -25,7 +26,6 @@
     }
   }
 }
-
 
 
 

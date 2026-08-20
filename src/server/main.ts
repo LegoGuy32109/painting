@@ -406,7 +406,8 @@ async function route(req: Request): Promise<Response> {
     url.pathname === "/app.js" || url.pathname === "/paint-engine.js" ||
     url.pathname === "/palette-engine.js" || url.pathname === "/ulid.js" ||
     url.pathname === "/sync.js" || url.pathname === "/local-db.js" ||
-    url.pathname === "/cell-codec.js" || url.pathname === "/compose.js"
+    url.pathname === "/cell-codec.js" || url.pathname === "/compose.js" ||
+    url.pathname === "/live-replay.js"
   ) {
     const source = await Deno.readTextFile(clientFile(url.pathname.slice(1)));
     return new Response(source, {

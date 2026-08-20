@@ -27,10 +27,6 @@ const SYNC_INTERVAL_MS = 4_000;
 // push whenever the outbox is behind (see drainOutbox) — tightening this
 // doesn't add HTTP round trips, just makes each recorded row more precise.
 const PROGRESS_FLUSH_MS = 50;
-// A quick tab-switch to check on something (e.g. the /dev/active page)
-// shouldn't read as "left the painting" — only a blur that outlasts this
-// grace window, uncancelled by a returning focus, counts as inactive.
-const BLUR_GRACE_MS = 6_000;
 
 // Opt-in timing trace for tuning replay smoothness against /dev/active — off
 // by default so ordinary painters never see it. Enable from devtools with
@@ -97,8 +93,6 @@ export function initSync(canvasElement) {
   let headSequence = 0;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let idleTimer = null;
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let blurTimer = null;
   let syncing = false;
   let signed = false;
 
@@ -328,21 +322,11 @@ export function initSync(canvasElement) {
       ),
     );
   }
-  addEventListener("blur", () => {
-    if (blurTimer) return;
-    blurTimer = setTimeout(() => {
-      blurTimer = null;
-      sendInactiveBeacon();
-    }, BLUR_GRACE_MS);
-  });
-  addEventListener("focus", () => {
-    if (blurTimer) {
-      clearTimeout(blurTimer);
-      blurTimer = null;
-    }
-  });
-  // A real navigation-away/close, unlike blur, has no "coming back" to wait
-  // for — report inactive immediately.
+  // Watching /dev/active normally moves the painter into a background tab.
+  // That is still a live session: its next stroke should stream to the
+  // viewer. A real navigation-away/close, unlike blur, ends the session and
+  // reports inactive immediately. Canvases abandoned without pagehide still
+  // fall out of the feed through listActiveCanvases()' stroke-age timeout.
   addEventListener("pagehide", sendInactiveBeacon);
 
   return { sign };

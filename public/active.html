@@ -22,6 +22,7 @@
     <div class="list" id="list"></div>
     <script type="module">
       import { CANVAS_WIDTH, CANVAS_HEIGHT } from "/paint-engine.js";
+      import { LiveReplay } from "/live-replay.js";
 
       const LIST_POLL_MS = 5000;
       // Replay is paced to each batch's recorded client_ts, not to when the
@@ -45,7 +46,7 @@
 
       const list = document.getElementById("list");
       /**
-       * @typedef {{ id: string, card: HTMLElement, ctx: CanvasRenderingContext2D, pixels: Int32Array, age: HTMLElement, source: EventSource, lastStrokeAt: number, queue: Array<{ts: number, cells: Array<[number, number]>}>, baseServerTs: number | null, baseLocalTime: number | null }} LiveEntry
+       * @typedef {{ id: string, card: HTMLElement, ctx: CanvasRenderingContext2D, pixels: Int32Array, age: HTMLElement, source: EventSource, lastStrokeAt: number, replay: LiveReplay }} LiveEntry
        */
       /** @type {Map<string, LiveEntry>} */
       const live = new Map();
@@ -64,19 +65,15 @@
       function drainDueBatches(entry) {
         const now = Date.now();
         let painted = false;
-        while (entry.queue.length > 0) {
-          const batch = entry.queue[0];
-          const targetTime = /** @type {number} */ (entry.baseLocalTime) +
-            (batch.ts - /** @type {number} */ (entry.baseServerTs));
-          if (targetTime > now) break;
-          entry.queue.shift();
+        for (const batch of entry.replay.drain(now)) {
+          const targetTime = entry.replay.targetTime(batch.ts);
           for (const [index, color] of batch.cells) entry.pixels[index] = color;
           entry.lastStrokeAt = Date.now();
           painted = true;
           debugTiming("batch painted", {
             id: entry.id,
             lateByMs: now - targetTime,
-            queueLenAfter: entry.queue.length,
+            queueLenAfter: entry.replay.queuedBatches,
           });
         }
         if (painted) paint(entry.ctx, entry.pixels);
@@ -139,9 +136,7 @@
           // @ts-ignore -- assigned by connectStream() immediately below
           source: undefined,
           lastStrokeAt: c.lastStrokeAt,
-          queue: [],
-          baseServerTs: null,
-          baseLocalTime: null,
+          replay: new LiveReplay({ lagMs: LAG_MS, catchUpThresholdMs: CATCH_UP_THRESHOLD_MS }),
         };
         connectStream(entry);
         live.set(c.id, entry);
@@ -157,9 +152,7 @@
        */
       function connectStream(entry) {
         entry.source?.close();
-        entry.queue = [];
-        entry.baseServerTs = null;
-        entry.baseLocalTime = null;
+        entry.replay.reset();
 
         // Live pixels: the server pushes real diffs (or, only after an undo,
         // a full resync snapshot) the instant anything changes for this
@@ -176,9 +169,7 @@
             // delta (see diffChunk() server-side) — jump straight to it and
             // drop any queued replay, which no longer applies.
             entry.pixels = decodePixels(msg.pixels);
-            entry.queue = [];
-            entry.baseServerTs = null;
-            entry.baseLocalTime = null;
+            entry.replay.reset();
             paint(entry.ctx, entry.pixels);
             entry.lastStrokeAt = Date.now();
             debugTiming("snapshot", { id: entry.id });
@@ -189,7 +180,7 @@
           debugTiming("message received", {
             id: entry.id,
             batchCount: msg.batches.length,
-            queueLenBefore: entry.queue.length,
+            queueLenBefore: entry.replay.queuedBatches,
           });
           for (const batch of msg.batches) {
             debugTiming("batch received", {
@@ -197,27 +188,8 @@
               transitMs: now - batch.ts,
               cellCount: batch.cells.length,
             });
-            if (entry.baseServerTs === null || entry.baseLocalTime === null) {
-              entry.baseServerTs = batch.ts;
-              entry.baseLocalTime = now + LAG_MS;
-              debugTiming("anchor init", {
-                id: entry.id,
-                baseServerTs: entry.baseServerTs,
-                baseLocalTime: entry.baseLocalTime,
-              });
-            } else {
-              const targetTime = entry.baseLocalTime + (batch.ts - entry.baseServerTs);
-              if (now - targetTime > CATCH_UP_THRESHOLD_MS) {
-                debugTiming("anchor reset (fell behind)", {
-                  id: entry.id,
-                  behindMs: now - targetTime,
-                });
-                entry.baseServerTs = batch.ts;
-                entry.baseLocalTime = now + LAG_MS;
-              }
-            }
-            entry.queue.push(batch);
           }
+          entry.replay.receive(msg.batches, now);
         };
       }
 
@@ -236,7 +208,7 @@
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState !== "visible") return;
         for (const entry of live.values()) {
-          debugTiming("resync on visible", { id: entry.id, queueLenDropped: entry.queue.length });
+          debugTiming("resync on visible", { id: entry.id, queueLenDropped: entry.replay.queuedBatches });
           connectStream(entry);
         }
       });
