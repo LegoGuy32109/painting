@@ -73,7 +73,7 @@ class PaintingParade extends HTMLElement {
     style.textContent = `
       :host { display:block; position:absolute; inset:0; overflow:hidden; pointer-events:none; contain:strict; }
       .stage { position:absolute; inset:0; overflow:hidden; }
-      figure { --size:clamp(7rem,18vw,13rem); position:absolute; z-index:1; left:100%; width:var(--size); margin:0; padding:.5rem; color:#1d1d21; border:.1875rem solid #5d482c; background:#fff8e5; box-shadow:.35rem .35rem 0 rgb(45 32 18 / 28%); animation:travel ${TRAVEL_DURATION_SECONDS}s linear forwards; will-change:transform; }
+      figure { --size:clamp(7rem,18vw,13rem); position:absolute; z-index:1; right:100%; width:var(--size); margin:0; padding:.5rem; color:#1d1d21; border:.1875rem solid #5d482c; background:#fff8e5; box-shadow:.35rem .35rem 0 rgb(45 32 18 / 28%); animation:travel ${TRAVEL_DURATION_SECONDS}s linear forwards; will-change:transform; }
       figure[data-row="top"] { top:18%; }
       figure[data-row="bottom"] { top:66%; }
       canvas { display:block; width:100%; aspect-ratio:1; image-rendering:pixelated; background:#fff9ff; }
@@ -82,11 +82,11 @@ class PaintingParade extends HTMLElement {
       .live { color:#b02e26; }
       :host([mode="ambient"]) { opacity:.55; filter:saturate(.85); }
       :host([mode="ambient"]) figure { --size:clamp(6rem,15vw,10rem); }
-      :host([mode="display"]) figure[data-row="top"] { top:34%; }
-      :host([mode="display"]) figure[data-row="bottom"] { top:68%; }
+      :host([mode="display"]) figure[data-row="top"] { top:26%; }
+      :host([mode="display"]) figure[data-row="bottom"] { top:59%; }
       :host([paused]) figure { animation-play-state:paused; }
-      @keyframes travel { from { transform:translate3d(0,0,0); } to { transform:translate3d(calc(-100vw - 170%),0,0); } }
-      @media (prefers-reduced-motion:reduce) { figure { left:var(--still-x); animation:none; } }
+      @keyframes travel { from { transform:translate3d(0,0,0); } to { transform:translate3d(calc(100vw + 170%),0,0); } }
+      @media (prefers-reduced-motion:reduce) { figure { right:auto; left:var(--still-x); animation:none; } }
     `;
     const stage = document.createElement("div");
     stage.className = "stage";
