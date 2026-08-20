@@ -6,17 +6,13 @@ import {
   createDb,
   listActiveCanvases,
   listRecentlyCompleted,
-  migrate,
   pullEventsSince,
 } from "../src/server/db.ts";
+import { migrateDatabase } from "../src/server/migrations.ts";
 import { ulid } from "../src/server/ulid.ts";
 
-const schemaSql = await Deno.readTextFile(
-  new URL("../src/server/schema.sql", import.meta.url),
-);
-
 const db = createDb();
-await migrate(db, schemaSql);
+await migrateDatabase(db);
 
 const dbUrl = Deno.env.get("TURSO_DB_URL")!;
 const dbToken = Deno.env.get("TURSO_DB_TOKEN")!;
@@ -37,9 +33,9 @@ async function dropCanvas(id: string): Promise<void> {
   await db.execute({ sql: "DELETE FROM canvases WHERE id = ?", args: [id] });
 }
 
-Deno.test("migrate() is idempotent", async () => {
-  await migrate(db, schemaSql);
-  await migrate(db, schemaSql);
+Deno.test("migrateDatabase() is idempotent", async () => {
+  await migrateDatabase(db);
+  await migrateDatabase(db);
 });
 
 Deno.test("foreign key CASCADE removes events when their canvas is deleted", async () => {

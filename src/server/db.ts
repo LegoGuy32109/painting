@@ -74,21 +74,6 @@ export function createDb(): Client {
   return createClient({ url, authToken });
 }
 
-export async function migrate(db: Client, schemaSql: string): Promise<void> {
-  await db.execute("PRAGMA foreign_keys = ON");
-  const withoutComments = schemaSql
-    .split("\n")
-    .map((line) => line.replace(/--.*$/, ""))
-    .join("\n");
-  const statements = withoutComments
-    .split(";")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  for (const statement of statements) {
-    await db.execute(statement);
-  }
-}
-
 export async function createCanvas(
   db: Client,
   id: string,
@@ -171,10 +156,9 @@ export async function completeCanvas(
  * network update on its own while there's nothing new to sync (see
  * IDLE_TIMEOUT_MS in src/client/paint-engine.js) — a painter who's just
  * thinking between strokes, not gone, relies entirely on this window
- * staying generous enough to outlast normal pauses. Note this window only
- * matters while client_reported_active stays 1 — tabbing away to check
- * /dev/active is itself a blur event, and BLUR_GRACE_MS (3s, in sync.js)
- * reports inactive explicitly well before this window would ever expire.
+ * staying generous enough to outlast normal pauses. A backgrounded painter
+ * remains active so the same browser can open /dev/active; pagehide reports
+ * inactive immediately, while this stroke-age window removes abandoned tabs.
  */
 export async function listActiveCanvases(
   db: Client,

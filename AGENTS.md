@@ -25,7 +25,8 @@ in `scripts/`. When in doubt about whether something is "client" or
   scope for the current phase.
 - `docs/turso-databases.md` — the Turso databases this project uses
   (`painting-prod`/`-dev`/`-local`/`-test-*`), how to create, migrate, and
-  delete them.
+  delete them. Read it before changing a schema: dev is resettable, while
+  production uses the immutable `migrations/` history and `migrate:prod`.
 - `docs/deno-deploy-env-vars.md` — how this app's environment variables are
   scoped per Deno Deploy context (Production/Preview/Build/Local), and the
   tooling (`scripts/set-deploy-env.ts`) needed to set a different value per
@@ -42,6 +43,14 @@ chaining the next command).
 - `scripts/ephemeral-test-db.ts` (`deno task test:e2e`) — creates a
   throwaway `painting-test-<slug>` database, runs the db test suite against
   it, deletes it in a `finally` regardless of pass/fail.
+- `scripts/migrate-prod.ts` (`deno task migrate:prod`) — applies the
+  immutable production migration history. It refuses any database other than
+  `painting-prod`.
+- `scripts/bootstrap-dev-db.ts` (`deno task bootstrap:dev`) — initializes a
+  newly recreated empty `painting-dev` database. It is not a migration tool.
+- `scripts/backup-environment-db.ts` and `clear-environment-db.ts` — backup
+  or clear a named deployment database. Read `docs/turso-databases.md` before
+  using either; clearing requires explicit confirmation.
 - `scripts/set-deploy-env.ts` — sets one Deno Deploy env var scoped to one
   context. Use this, not `deno deploy env add`, for anything that needs a
   different value per context (see `docs/deno-deploy-env-vars.md` for why).

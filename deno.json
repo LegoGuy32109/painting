@@ -7,6 +7,10 @@
     "test:db": "deno test --allow-net --allow-env --allow-read tests/db_test.ts",
     "test:routes": "deno test --allow-net --allow-env --allow-read tests/sync-routes_test.ts",
     "test:e2e": "deno run --allow-net --allow-env --allow-read --allow-run scripts/ephemeral-test-db.ts",
+    "migrate:prod": "deno run --env-file --allow-net --allow-env --allow-read scripts/migrate-prod.ts",
+    "bootstrap:dev": "deno run --env-file --allow-net --allow-env --allow-read scripts/bootstrap-dev-db.ts",
+    "backup:db": "deno run --env-file --allow-net --allow-env --allow-read --allow-write scripts/backup-environment-db.ts",
+    "clear:db": "deno run --env-file --allow-net --allow-env scripts/clear-environment-db.ts",
     "seed:dev": "deno run --allow-net --allow-env scripts/seed-dev-canvases.ts"
   },
   "compilerOptions": {
@@ -26,8 +30,6 @@
     }
   }
 }
-
-
 
 
 

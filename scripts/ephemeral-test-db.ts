@@ -64,15 +64,13 @@ const dbUrl = `libsql://${hostname}`;
 
 let exitCode = 1;
 try {
-  const { createDb, migrate } = await import("../src/server/db.ts");
+  const { createDb } = await import("../src/server/db.ts");
+  const { migrateDatabase } = await import("../src/server/migrations.ts");
   Deno.env.set("TURSO_DB_URL", dbUrl);
   Deno.env.set("TURSO_DB_TOKEN", token);
 
-  const schemaSql = await Deno.readTextFile(
-    new URL("../src/server/schema.sql", import.meta.url),
-  );
   const db = createDb();
-  await migrate(db, schemaSql);
+  await migrateDatabase(db);
   console.log(`Migrated ${name}, running tests...`);
 
   const testProcess = new Deno.Command(Deno.execPath(), {

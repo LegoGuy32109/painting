@@ -10,7 +10,7 @@ because it's the only engine that supports `BEGIN CONCURRENT` — see
 | Name | Purpose | Lifecycle |
 |---|---|---|
 | `painting-prod` | Real production data, served at `paint.joshhale.me` | Persistent |
-| `painting-dev` | The `dev` branch / any preview deploy | Persistent |
+| `painting-dev` | The `dev` branch / any preview deploy | Disposable; recreate for schema changes |
 | `painting-local` | Your own machine running `deno task dev` or `test:db` | Persistent |
 | `painting-test-<slug>` | One per `test:e2e` run | Created, migrated, tested, deleted every run — never persists |
 
@@ -43,20 +43,82 @@ curl -s -X POST -H "Authorization: Bearer $TURSO_API_KEY" \
   "https://api.turso.tech/v1/organizations/legoguy/databases/painting-whatever/auth/tokens?expiration=never&authorization=full-access"
 ```
 
-And apply the schema (this just runs `migrate()` against whatever
-`TURSO_DB_URL`/`TURSO_DB_TOKEN` are in the environment — it's idempotent, safe
-to re-run):
+For a newly created dev database, initialize it from the current initial
+schema. This is only for an empty `painting-dev`; it refuses an existing
+database so it cannot accidentally paper over a missing schema change:
 
 ```bash
-TURSO_DB_URL="libsql://painting-whatever-legoguy.aws-us-east-2.turso.io" \
+TURSO_DB_URL="libsql://painting-dev-legoguy.aws-us-east-2.turso.io" \
 TURSO_DB_TOKEN="<jwt from above>" \
-deno eval --ext=ts '
-import { createDb, migrate } from "./src/server/db.ts";
-const schemaSql = await Deno.readTextFile("./src/server/schema.sql");
-await migrate(createDb(), schemaSql);
-console.log("migrated");
-'
+deno task bootstrap:dev
 ```
+
+## Schema changes
+
+Development and production deliberately use different workflows.
+
+### Dev is reset, not migrated
+
+`painting-dev` is a shared preview environment between local work and
+production. It contains no durable production data. While the app is still
+pre-production, do not add a migration merely to evolve dev: delete and
+recreate `painting-dev`, mint its new token, update the Preview deployment
+variables, then run `bootstrap:dev` with the new credentials. This starts dev
+from the current initial schema.
+
+`painting-local` is separate and may be kept for personal work. It is not a
+deployment target and is never changed by either database script.
+
+### Backup and clearing
+
+The environment tools accept `Prod`, `Preview`, or `Development`. Preview and
+Development currently both target `painting-dev`; the latter identifies the
+dev-branch workflow even though the Deno Deploy API currently presents that
+branch timeline as Preview. The scripts use `TURSO_API_KEY` and
+`TURSO_ORG_SLUG` to resolve the database and mint a connection token whose
+value exists only in the current process. Turso records issued tokens, but the
+scripts neither log nor write their values; `.env` does not need one URL/token
+pair per environment. Alternatively, matching `TURSO_DB_URL` and
+`TURSO_DB_TOKEN` values override that path. Deno Deploy lists secret variables
+as `null`, so it cannot supply the token to these local commands.
+
+```bash
+deno task backup:db Development
+```
+
+The command writes a JSON snapshot under ignored `backups/`. To erase painting
+data while retaining the database schema and its migration ledger, use:
+
+```bash
+deno task clear:db Development --confirm Development
+```
+
+Clearing is irreversible. Production clearing requires the additional
+`--allow-production` flag as well as `--confirm Production`.
+
+### Production uses immutable migrations
+
+`migrations/001_initial.sql` is the current initial schema. Before the first
+production migration, it is also what `bootstrap:dev` uses for a newly
+recreated dev database, so update it as the pre-production schema evolves.
+Once production applies `001_initial.sql`, it becomes immutable. When
+production exists and a schema must evolve, add a new sequential migration
+file such as `002_add_thing.sql`; never edit a migration that could already
+have run.
+
+After the production release is approved, use the Turso organization
+credentials already in `.env` (or explicit production database credentials):
+
+```bash
+deno task migrate:prod --dry-run
+
+deno task migrate:prod
+```
+
+Run the migration before deploying code that requires it. The runner maintains
+`schema_migrations`, applies each pending file atomically with its ledger row,
+and rejects a migration whose contents changed after application. The serving
+app never runs migrations on startup or while handling traffic.
 
 ## Deleting a database
 
@@ -85,7 +147,7 @@ curl -s -H "Authorization: Bearer $TURSO_API_KEY" \
 ## Ephemeral test databases
 
 `scripts/ephemeral-test-db.ts` (run via `deno task test:e2e`) automates the
-whole create → migrate → test → delete cycle above for a throwaway
+whole create → apply the production migration history → test → delete cycle for a throwaway
 `painting-test-<time-slug>` database. The slug means more than one can exist
 at once — a local run and a CI run, or several CI runs, don't collide. It
 deletes the database in a `finally`, so a failing test suite still cleans up.
