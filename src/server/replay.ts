@@ -5,8 +5,10 @@ import type {
   ReplayStep,
 } from "../shared/paint-types.d.ts";
 
-export const MAX_REPLAY_WINDOW_MS = 40_000;
-export const MAX_REPLAY_EVENTS = 20_000;
+export const REPLAY_EVENT_LIMIT = 140;
+export const MAX_REPLAY_GAP_MS = 500;
+export const MAX_REPLAY_DURATION_MS = 44_000;
+export const MAX_CANVAS_EVENTS = 20_000;
 
 function base64(bytes: Uint8Array): string {
   let binary = "";
@@ -20,18 +22,19 @@ function pixelsBase64(events: CanvasEventRow[]): string {
 }
 
 /**
- * Produces a bounded playback window. Stroke rows remain compact diffs; undo
- * rows become snapshots because they can remove a stroke from before the
- * window. Sequence order is authoritative and timestamps are clamped forward
- * so a skewed clock cannot make playback reverse or stall.
+ * Produces a bounded event-count replay. Stroke rows remain compact diffs;
+ * undo rows become snapshots because they can remove a stroke from before the
+ * replay. Sequence order is authoritative. Client timestamp gaps are clamped
+ * so pauses cannot stall playback, then proportionally compressed if needed
+ * so the signed frame is visible before its display card leaves.
  */
 export function buildCanvasReplay(
   id: string,
   title: string,
   events: CanvasEventRow[],
-  windowMs = MAX_REPLAY_WINDOW_MS,
+  eventLimit = REPLAY_EVENT_LIMIT,
 ): CanvasReplayResponse {
-  if (events.length > MAX_REPLAY_EVENTS) {
+  if (events.length > MAX_CANVAS_EVENTS) {
     throw new Error("canvas has too many events to replay");
   }
   if (events.length === 0) {
@@ -46,23 +49,29 @@ export function buildCanvasReplay(
     };
   }
 
-  const times: number[] = [];
-  let previous = events[0].clientTs;
-  for (const event of events) {
-    previous = Math.max(previous, event.clientTs);
-    times.push(previous);
-  }
-  const end = times.at(-1) as number;
-  const start = Math.max(times[0], end - Math.max(0, windowMs));
-  let split = 0;
-  while (split < times.length && times[split] < start) split++;
-
+  const boundedLimit = Math.max(0, Math.floor(eventLimit));
+  const split = Math.max(0, events.length - boundedLimit);
   const prefix = events.slice(0, split);
+  const replayEvents = events.slice(split);
+  const times: number[] = [];
+  let elapsed = 0;
+  let previous = replayEvents[0]?.clientTs ?? 0;
+  replayEvents.forEach((event, index) => {
+    const current = Math.max(previous, event.clientTs);
+    if (index > 0) {
+      elapsed += Math.min(MAX_REPLAY_GAP_MS, current - previous);
+    }
+    times.push(elapsed);
+    previous = current;
+  });
+  const scale = elapsed > MAX_REPLAY_DURATION_MS
+    ? MAX_REPLAY_DURATION_MS / elapsed
+    : 1;
   /** @type {ReplayStep[]} */
   const steps: ReplayStep[] = [];
   for (let index = split; index < events.length; index++) {
     const event = events[index];
-    const atMs = Math.max(0, times[index] - start);
+    const atMs = Math.round(times[index - split] * scale);
     if (event.kind === "stroke" && event.cells) {
       steps.push({ type: "diff", atMs, cells: base64(event.cells) });
     } else if (event.kind === "undo") {
@@ -79,7 +88,7 @@ export function buildCanvasReplay(
     title,
     initialPixels: pixelsBase64(prefix),
     finalPixels: pixelsBase64(events),
-    durationMs: Math.max(0, end - start),
+    durationMs: Math.round(elapsed * scale),
     steps,
   };
 }

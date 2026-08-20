@@ -41,7 +41,7 @@ import {
   validatePushEvents,
 } from "./protocol.ts";
 import { consumeGuestMutation } from "./rate-limit.ts";
-import { buildCanvasReplay, MAX_REPLAY_WINDOW_MS } from "./replay.ts";
+import { buildCanvasReplay } from "./replay.ts";
 import type {
   DisplayFeedResponse,
   EnsureDraftResponse,
@@ -477,7 +477,6 @@ async function route(req: Request): Promise<Response> {
         canvasId,
         completed.title ?? "Untitled",
         events,
-        MAX_REPLAY_WINDOW_MS,
       ),
       {
         headers: {

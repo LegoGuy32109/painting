@@ -15,6 +15,7 @@ import {
 
 const SPAWN_INTERVAL_MS = 6_000;
 const TRAVEL_DURATION_SECONDS = 52;
+const RECENT_COMPLETED_LIMIT = 10;
 
 class PaintingParade extends HTMLElement {
   constructor() {
@@ -111,21 +112,38 @@ class PaintingParade extends HTMLElement {
           additions.push({ canvas, kind: /** @type {const} */ ("active") });
         }
       }
-      for (const canvas of feed.completed) {
-        if (
-          !this.visible.has(canvas.id) && !this.queuedIds.has(canvas.id) &&
-          !this.recentCompleted.includes(canvas.id)
-        ) {
-          additions.push({ canvas, kind: /** @type {const} */ ("completed") });
-        }
+      const completedAvailable = feed.completed.filter((canvas) =>
+        !this.visible.has(canvas.id) && !this.queuedIds.has(canvas.id)
+      );
+      let completedAdditions = completedAvailable.filter((canvas) =>
+        !this.recentCompleted.includes(canvas.id)
+      );
+      const completedInFlight = this.queue.some((item) =>
+        item.kind === "completed"
+      ) || [...this.visible.values()].some((entry) =>
+        entry.kind === "completed"
+      );
+      if (
+        completedAdditions.length === 0 && completedAvailable.length > 0 &&
+        !completedInFlight
+      ) {
+        this.recentCompleted.length = 0;
+        completedAdditions = completedAvailable;
+      }
+      for (const canvas of completedAdditions) {
+        additions.push({ canvas, kind: /** @type {const} */ ("completed") });
       }
       const activeAdditions = additions.filter((item) =>
         item.kind === "active"
       );
-      const completedAdditions = additions.filter((item) =>
+      const queuedCompletedAdditions = additions.filter((item) =>
         item.kind === "completed"
       );
-      this.queue = [...activeAdditions, ...this.queue, ...completedAdditions];
+      this.queue = [
+        ...activeAdditions,
+        ...this.queue,
+        ...queuedCompletedAdditions,
+      ];
       for (const addition of additions) {
         this.queuedIds.add(addition.canvas.id);
       }
@@ -227,7 +245,7 @@ class PaintingParade extends HTMLElement {
 
   /** @param {PublicCanvas} canvas */
   async completedEntry(canvas) {
-    const response = await fetch(`/canvases/${canvas.id}/replay`);
+    const response = await fetch(`/canvases/${canvas.id}/replay?v=2`);
     if (!response.ok) throw new Error(`replay failed: ${response.status}`);
     const timeline =
       /** @type {CanvasReplayResponse} */ (await response.json());
@@ -238,7 +256,9 @@ class PaintingParade extends HTMLElement {
     entry.timeline = timeline;
     entry.startedAt = performance.now();
     this.recentCompleted.push(canvas.id);
-    if (this.recentCompleted.length > 30) this.recentCompleted.shift();
+    if (this.recentCompleted.length > RECENT_COMPLETED_LIMIT) {
+      this.recentCompleted.shift();
+    }
     return entry;
   }
 
