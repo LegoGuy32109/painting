@@ -21,18 +21,24 @@ function statements(sql: string): string[] {
 async function checksum(text: string): Promise<string> {
   const bytes = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(digest)].map((byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
 }
 
 async function readMigrations(): Promise<Migration[]> {
   const files: string[] = [];
   for await (const entry of Deno.readDir(migrationsDirectory)) {
-    if (entry.isFile && /^\d{3}_[a-z0-9_]+\.sql$/.test(entry.name)) files.push(entry.name);
+    if (entry.isFile && /^\d{3}_[a-z0-9_]+\.sql$/.test(entry.name)) {
+      files.push(entry.name);
+    }
   }
-  return await Promise.all(files.sort().map(async (file) => {
-    const sql = await Deno.readTextFile(new URL(file, migrationsDirectory));
-    return { version: file, sql, checksum: await checksum(sql) };
-  }));
+  return await Promise.all(
+    files.sort().map(async (file) => {
+      const sql = await Deno.readTextFile(new URL(file, migrationsDirectory));
+      return { version: file, sql, checksum: await checksum(sql) };
+    }),
+  );
 }
 
 /**
@@ -44,15 +50,21 @@ export async function migrateDatabase(db: Client): Promise<string[]> {
   await db.execute(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL)",
   );
-  const result = await db.execute("SELECT version, checksum FROM schema_migrations");
-  const applied = new Map(result.rows.map((row) => [String(row.version), String(row.checksum)]));
+  const result = await db.execute(
+    "SELECT version, checksum FROM schema_migrations",
+  );
+  const applied = new Map(
+    result.rows.map((row) => [String(row.version), String(row.checksum)]),
+  );
   const migrations = await readMigrations();
   const pending: Migration[] = [];
 
   for (const migration of migrations) {
     const existing = applied.get(migration.version);
     if (existing && existing !== migration.checksum) {
-      throw new Error(`migration ${migration.version} was changed after it was applied`);
+      throw new Error(
+        `migration ${migration.version} was changed after it was applied`,
+      );
     }
     if (!existing) pending.push(migration);
   }
@@ -61,7 +73,8 @@ export async function migrateDatabase(db: Client): Promise<string[]> {
     await db.batch([
       ...statements(migration.sql),
       {
-        sql: "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?, ?, ?)",
+        sql:
+          "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?, ?, ?)",
         args: [migration.version, migration.checksum, Date.now()],
       },
     ], "immediate");
@@ -73,8 +86,14 @@ export async function pendingMigrations(db: Client): Promise<string[]> {
   await db.execute(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL)",
   );
-  const result = await db.execute("SELECT version, checksum FROM schema_migrations");
-  const applied = new Map(result.rows.map((row) => [String(row.version), String(row.checksum)]));
+  const result = await db.execute(
+    "SELECT version, checksum FROM schema_migrations",
+  );
+  const applied = new Map(
+    result.rows.map((row) => [String(row.version), String(row.checksum)]),
+  );
   const migrations = await readMigrations();
-  return migrations.filter((migration) => !applied.has(migration.version)).map((migration) => migration.version);
+  return migrations.filter((migration) => !applied.has(migration.version)).map((
+    migration,
+  ) => migration.version);
 }

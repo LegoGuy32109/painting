@@ -42,7 +42,9 @@ export function colorFromWell(well) {
   const maximum = Math.floor(well.totalMaximum / well.numberOfColors);
   const highest = Math.max(red, green, blue);
   const gain = highest === 0 ? 0 : Math.floor(maximum / highest);
-  return `#${hexChannel(gain * red)}${hexChannel(gain * green)}${hexChannel(gain * blue)}`;
+  return `#${hexChannel(gain * red)}${hexChannel(gain * green)}${
+    hexChannel(gain * blue)
+  }`;
 }
 
 /** @param {PaletteWell} well @param {string} color */

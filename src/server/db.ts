@@ -6,7 +6,7 @@
 // It doesn't support BEGIN CONCURRENT yet, which is why ConcurrentTx below
 // still talks to the Hrana pipeline endpoint directly with a hand-rolled
 // fetch() call instead.
-import { createClient, type Client } from "@tursodatabase/serverless/compat";
+import { type Client, createClient } from "@tursodatabase/serverless/compat";
 export type { Client };
 
 /** @typedef {"stroke" | "undo" | "complete"} EventKind */
@@ -127,9 +127,13 @@ export async function getCanvasOwnerId(
   return (res.rows[0].owner_id as string | null) ?? null;
 }
 
-export async function headSequence(db: Client, canvasId: string): Promise<number> {
+export async function headSequence(
+  db: Client,
+  canvasId: string,
+): Promise<number> {
   const res = await db.execute({
-    sql: "SELECT COALESCE(MAX(sequence), 0) as head FROM canvas_events WHERE canvas_id = ?",
+    sql:
+      "SELECT COALESCE(MAX(sequence), 0) as head FROM canvas_events WHERE canvas_id = ?",
     args: [canvasId],
   });
   return Number(res.rows[0].head);
@@ -210,7 +214,9 @@ function rowToSummary(row: any): CanvasSummary {
     ownerId: row.owner_id ?? null,
     title: row.title ?? null,
     createdAt: Number(row.created_at),
-    lastStrokeAt: row.last_stroke_at === null ? null : Number(row.last_stroke_at),
+    lastStrokeAt: row.last_stroke_at === null
+      ? null
+      : Number(row.last_stroke_at),
     clientReportedActive: Number(row.client_reported_active) === 1,
     completedAt: row.completed_at === null ? null : Number(row.completed_at),
   };
@@ -253,7 +259,10 @@ function rowToEvent(row: any): CanvasEventRow {
 interface PipelineResponse {
   baton: string | null;
   results: Array<
-    { type: "ok"; response: unknown } | { type: "error"; error: { message: string } }
+    { type: "ok"; response: unknown } | {
+      type: "error";
+      error: { message: string };
+    }
   >;
 }
 
@@ -271,7 +280,9 @@ class ConcurrentTx {
    * request. Throws ConcurrencyConflictError if this transaction lost a row
    * conflict (surfacing on any statement, or at commit).
    */
-  async runBatch(statements: Array<{ sql: string; args?: unknown[] }>): Promise<void> {
+  async runBatch(
+    statements: Array<{ sql: string; args?: unknown[] }>,
+  ): Promise<void> {
     const requests = [
       { type: "execute", stmt: { sql: "BEGIN CONCURRENT" } },
       ...statements.map((s) => ({
@@ -308,7 +319,8 @@ class ConcurrentTx {
     }
     if (!res.ok || !Array.isArray(body.results)) {
       throw new Error(
-        `pipeline request failed (status ${res.status}): ` + rawBody.slice(0, 500),
+        `pipeline request failed (status ${res.status}): ` +
+          rawBody.slice(0, 500),
       );
     }
     throwOnError(body);
@@ -317,7 +329,9 @@ class ConcurrentTx {
 
 function toHranaArg(value: unknown) {
   if (value === null || value === undefined) return { type: "null" };
-  if (typeof value === "number") return { type: "integer", value: String(value) };
+  if (typeof value === "number") {
+    return { type: "integer", value: String(value) };
+  }
   if (value instanceof Uint8Array) {
     return { type: "blob", base64: btoa(String.fromCharCode(...value)) };
   }
@@ -375,7 +389,8 @@ export async function appendEvents(
       ],
     })),
     {
-      sql: "UPDATE canvases SET last_stroke_at = ?, client_reported_active = ? WHERE id = ?",
+      sql:
+        "UPDATE canvases SET last_stroke_at = ?, client_reported_active = ? WHERE id = ?",
       args: [now, heartbeatActive ? 1 : 0, canvasId],
     },
   ];
@@ -391,7 +406,9 @@ export async function appendEvents(
         // concurrent pushes to one canvas exhausted all 5 immediate retries
         // for 2 of them. Jittered exponential backoff spreads retries out so
         // they stop colliding with each other on the way back in.
-        await new Promise((resolve) => setTimeout(resolve, conflictBackoffMs(attempt)));
+        await new Promise((resolve) =>
+          setTimeout(resolve, conflictBackoffMs(attempt))
+        );
         continue;
       }
       throw e;

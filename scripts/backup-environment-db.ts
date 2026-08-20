@@ -24,12 +24,16 @@ function jsonValue(value: unknown): unknown {
     return { encoding: "base64", data: btoa(binary) };
   }
   if (value instanceof ArrayBuffer) return jsonValue(new Uint8Array(value));
-  if (typeof value === "bigint") return { encoding: "bigint", data: value.toString() };
+  if (typeof value === "bigint") {
+    return { encoding: "bigint", data: value.toString() };
+  }
   return value;
 }
 
 function identifier(name: string): string {
-  if (!/^[a-z_][a-z0-9_]*$/i.test(name)) throw new Error(`unsafe table name: ${name}`);
+  if (!/^[a-z_][a-z0-9_]*$/i.test(name)) {
+    throw new Error(`unsafe table name: ${name}`);
+  }
   return `"${name}"`;
 }
 
@@ -42,18 +46,29 @@ const tables = await Promise.all(tablesResult.rows.map(async (row) => {
   return {
     name,
     schema: row.sql,
-    rows: result.rows.map((record) => Object.fromEntries(
-      Object.entries(record).map(([key, value]) => [key, jsonValue(value)]),
-    )),
+    rows: result.rows.map((record) =>
+      Object.fromEntries(
+        Object.entries(record).map(([key, value]) => [key, jsonValue(value)]),
+      )
+    ),
   };
 }));
 
 await Deno.mkdir(new URL(".", outputUrl), { recursive: true });
-await Deno.writeTextFile(outputUrl, `${JSON.stringify({
-  format: "joy-of-painting-db-backup/v1",
-  environment: environment.label,
-  database: environment.database,
-  capturedAt: new Date().toISOString(),
-  tables,
-}, null, 2)}\n`);
+await Deno.writeTextFile(
+  outputUrl,
+  `${
+    JSON.stringify(
+      {
+        format: "joy-of-painting-db-backup/v1",
+        environment: environment.label,
+        database: environment.database,
+        capturedAt: new Date().toISOString(),
+        tables,
+      },
+      null,
+      2,
+    )
+  }\n`,
+);
 console.log(`Wrote ${output}`);

@@ -31,8 +31,13 @@ export function openLocalDb() {
       });
       localEvents.createIndex("by_canvas_status", ["canvasId", "status"]);
 
-      const canvasesLocal = db.createObjectStore("canvases_local", { keyPath: "id" });
-      canvasesLocal.createIndex("by_owner_completed", ["ownerId", "completedAt"]);
+      const canvasesLocal = db.createObjectStore("canvases_local", {
+        keyPath: "id",
+      });
+      canvasesLocal.createIndex("by_owner_completed", [
+        "ownerId",
+        "completedAt",
+      ]);
 
       const canvasHistory = db.createObjectStore("canvas_history", {
         keyPath: ["canvasId", "sequence"],
@@ -75,7 +80,9 @@ export function appendLocalEvent(db, event) {
 /** @param {IDBDatabase} db @param {string} canvasId @returns {Promise<LocalEventRecord[]>} */
 export function listPendingLocalEvents(db, canvasId) {
   return new Promise((resolve, reject) => {
-    const index = store(db, "local_events", "readonly").index("by_canvas_status");
+    const index = store(db, "local_events", "readonly").index(
+      "by_canvas_status",
+    );
     const range = IDBKeyRange.only([canvasId, "pending"]);
     /** @type {LocalEventRecord[]} */
     const results = [];
@@ -138,7 +145,9 @@ export function upsertCanvasLocal(db, record) {
 /** @param {IDBDatabase} db @param {string} ownerId @returns {Promise<CanvasLocalRecord[]>} */
 export function listMyGallery(db, ownerId) {
   return new Promise((resolve, reject) => {
-    const index = store(db, "canvases_local", "readonly").index("by_owner_completed");
+    const index = store(db, "canvases_local", "readonly").index(
+      "by_owner_completed",
+    );
     const range = IDBKeyRange.bound([ownerId, 0], [ownerId, Infinity]);
     /** @type {CanvasLocalRecord[]} */
     const results = [];

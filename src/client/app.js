@@ -29,8 +29,8 @@ import {
 } from "./paint-engine.js";
 import {
   addColorToWell,
-  colorFromWell,
   clearWell,
+  colorFromWell,
   EMPTY_WELL_COLOR,
   emptyWell,
 } from "./palette-engine.js";
@@ -194,7 +194,10 @@ class PaintPalette extends HTMLElement {
     const sourceElement = event.composedPath().find((node) =>
       node instanceof HTMLElement && node.dataset.paletteSource
     );
-    if (!(sourceElement instanceof HTMLElement) || sourceElement.hasAttribute("disabled")) return;
+    if (
+      !(sourceElement instanceof HTMLElement) ||
+      sourceElement.hasAttribute("disabled")
+    ) return;
     const source = sourceElement.dataset.paletteSource;
     const color = sourceElement.dataset.paletteColor ||
       sourceElement.getAttribute("color");
@@ -221,7 +224,10 @@ class PaintPalette extends HTMLElement {
   onPointerMove(event) {
     const drag = this.drag;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const distance = Math.hypot(event.clientX - drag.originX, event.clientY - drag.originY);
+    const distance = Math.hypot(
+      event.clientX - drag.originX,
+      event.clientY - drag.originY,
+    );
     if (!drag.active && distance < 6) return;
     if (!drag.active) this.startDrag(drag, event);
     event.preventDefault();
@@ -235,8 +241,11 @@ class PaintPalette extends HTMLElement {
     this.drag = null;
     drag.element.releasePointerCapture?.(event.pointerId);
     if (!drag.active) return;
-    const targetIndex = drag.target ? Number(drag.target.dataset.paletteIndex) : -1;
-    const valid = targetIndex >= 0 && !(drag.source === "custom" && drag.sourceIndex === targetIndex);
+    const targetIndex = drag.target
+      ? Number(drag.target.dataset.paletteIndex)
+      : -1;
+    const valid = targetIndex >= 0 &&
+      !(drag.source === "custom" && drag.sourceIndex === targetIndex);
     if (valid) this.commitDrop(drag, targetIndex);
     this.finishDrag(drag, valid);
   }
@@ -244,16 +253,22 @@ class PaintPalette extends HTMLElement {
   /** @param {any} drag @param {PointerEvent} event */
   startDrag(drag, event) {
     drag.active = true;
-    this.root.querySelectorAll("mc-color[data-palette-target]").forEach((well) => {
-      if (
-        well instanceof HTMLElement &&
-        (drag.source !== "custom" || well.dataset.paletteIndex !== String(drag.sourceIndex))
-      ) {
-        well.setAttribute("drop-eligible", "");
-      }
-    });
+    this.root.querySelectorAll("mc-color[data-palette-target]").forEach(
+      (well) => {
+        if (
+          well instanceof HTMLElement &&
+          (drag.source !== "custom" ||
+            well.dataset.paletteIndex !== String(drag.sourceIndex))
+        ) {
+          well.setAttribute("drop-eligible", "");
+        }
+      },
+    );
     const ghost = document.createElement("div");
-    ghost.style.cssText = `position:fixed; z-index:10; top:0; left:0; width:2.5rem; height:2.5rem; border:1px solid #8b7144; border-radius:.125rem; pointer-events:none; will-change:transform; background:${drag.source === "water" ? "#d9f2ff" : drag.color}; opacity:0; transition:opacity 120ms ease;`;
+    ghost.style.cssText =
+      `position:fixed; z-index:10; top:0; left:0; width:2.5rem; height:2.5rem; border:1px solid #8b7144; border-radius:.125rem; pointer-events:none; will-change:transform; background:${
+        drag.source === "water" ? "#d9f2ff" : drag.color
+      }; opacity:0; transition:opacity 120ms ease;`;
     document.body.append(ghost);
     drag.ghost = ghost;
     this.updateDrag(drag, event);
@@ -289,16 +304,25 @@ class PaintPalette extends HTMLElement {
     const palette = this.palette();
     const customWells = palette.customWells.map((well, index) => {
       if (index !== targetIndex) return { ...well };
-      return drag.source === "water" ? clearWell(well) : addColorToWell(well, drag.color);
+      return drag.source === "water"
+        ? clearWell(well)
+        : addColorToWell(well, drag.color);
     });
-    const nextPalette = { baseAvailable: [...palette.baseAvailable], customWells };
+    const nextPalette = {
+      baseAvailable: [...palette.baseAvailable],
+      customWells,
+    };
     const selection = this.selection();
     /** @type {PaletteSelection} */
     let nextSelection = selection;
     if (selection.source === "custom" && selection.index === targetIndex) {
       nextSelection = customWells[targetIndex].numberOfColors === 0
         ? { source: null, index: null, color: null }
-        : { source: "custom", index: targetIndex, color: colorFromWell(customWells[targetIndex]) };
+        : {
+          source: "custom",
+          index: targetIndex,
+          color: colorFromWell(customWells[targetIndex]),
+        };
     }
     /** @type {PaletteStateChangedDetail} */
     const detail = { palette: nextPalette, selection: nextSelection };
@@ -308,18 +332,26 @@ class PaintPalette extends HTMLElement {
   /** @param {any} drag @param {boolean} success */
   finishDrag(drag, success) {
     if (drag.frame) cancelAnimationFrame(drag.frame);
-    this.root.querySelectorAll("[drop-eligible], [drop-target]").forEach((well) => {
-      well.removeAttribute("drop-eligible");
-      well.removeAttribute("drop-target");
-    });
+    this.root.querySelectorAll("[drop-eligible], [drop-target]").forEach(
+      (well) => {
+        well.removeAttribute("drop-eligible");
+        well.removeAttribute("drop-target");
+      },
+    );
     if (!drag.ghost) return;
     if (success || this.prefersReducedMotion()) drag.ghost.style.opacity = "0";
     else {
       const sourceBounds = drag.element.getBoundingClientRect();
-      drag.ghost.style.transform =
-        `translate3d(${sourceBounds.left + sourceBounds.width / 2}px, ${sourceBounds.top + sourceBounds.height / 2}px, 0) translate(-50%, -50%)`;
+      drag.ghost.style.transform = `translate3d(${
+        sourceBounds.left + sourceBounds.width / 2
+      }px, ${
+        sourceBounds.top + sourceBounds.height / 2
+      }px, 0) translate(-50%, -50%)`;
     }
-    window.setTimeout(() => drag.ghost.remove(), this.prefersReducedMotion() ? 0 : 160);
+    window.setTimeout(
+      () => drag.ghost.remove(),
+      this.prefersReducedMotion() ? 0 : 160,
+    );
   }
 
   prefersReducedMotion() {
@@ -416,12 +448,16 @@ class PaintPalette extends HTMLElement {
       }
       customWell.setAttribute(
         "aria-label",
-        empty ? `Custom color ${index + 1}, empty` : `Custom color ${index + 1}`,
+        empty
+          ? `Custom color ${index + 1}, empty`
+          : `Custom color ${index + 1}`,
       );
       if (selection.source === "custom" && selection.index === index) {
         customWell.setAttribute("selected", "");
       }
-      if (this.confirmedTarget === index) customWell.setAttribute("drop-confirmed", "");
+      if (this.confirmedTarget === index) {
+        customWell.setAttribute("drop-confirmed", "");
+      }
       customWell.addEventListener("click", () => {
         if (empty) return;
         emit(this, "palette-color-selected", {
@@ -468,15 +504,20 @@ class PaintCanvas extends HTMLElement {
     /** @type {Stroke | null} */
     this.stroke = null;
     /** @type {HTMLDivElement} */
-    this.surface = /** @type {HTMLDivElement} */ (/** @type {unknown} */ (null));
+    this.surface =
+      /** @type {HTMLDivElement} */ (/** @type {unknown} */ (null));
     /** @type {HTMLCanvasElement} */
-    this.baseCanvas = /** @type {HTMLCanvasElement} */ (/** @type {unknown} */ (null));
+    this.baseCanvas =
+      /** @type {HTMLCanvasElement} */ (/** @type {unknown} */ (null));
     /** @type {HTMLCanvasElement} */
-    this.overlayCanvas = /** @type {HTMLCanvasElement} */ (/** @type {unknown} */ (null));
+    this.overlayCanvas =
+      /** @type {HTMLCanvasElement} */ (/** @type {unknown} */ (null));
     /** @type {CanvasRenderingContext2D} */
-    this.baseContext = /** @type {CanvasRenderingContext2D} */ (/** @type {unknown} */ (null));
+    this.baseContext =
+      /** @type {CanvasRenderingContext2D} */ (/** @type {unknown} */ (null));
     /** @type {CanvasRenderingContext2D} */
-    this.overlayContext = /** @type {CanvasRenderingContext2D} */ (/** @type {unknown} */ (null));
+    this.overlayContext =
+      /** @type {CanvasRenderingContext2D} */ (/** @type {unknown} */ (null));
     this.cellSize = 1;
     this.displaySize = CANVAS_WIDTH;
     this.drawScale = 1;
@@ -501,11 +542,21 @@ class PaintCanvas extends HTMLElement {
         <canvas class="overlay" aria-hidden="true"></canvas>
       </div>
     `;
-    this.surface = /** @type {HTMLDivElement} */ (this.root.querySelector(".surface"));
-    this.baseCanvas = /** @type {HTMLCanvasElement} */ (this.root.querySelector(".base"));
-    this.overlayCanvas = /** @type {HTMLCanvasElement} */ (this.root.querySelector(".overlay"));
-    this.baseContext = /** @type {CanvasRenderingContext2D} */ (this.baseCanvas.getContext("2d", { alpha: false }));
-    this.overlayContext = /** @type {CanvasRenderingContext2D} */ (this.overlayCanvas.getContext("2d"));
+    this.surface =
+      /** @type {HTMLDivElement} */ (this.root.querySelector(".surface"));
+    this.baseCanvas =
+      /** @type {HTMLCanvasElement} */ (this.root.querySelector(".base"));
+    this.overlayCanvas =
+      /** @type {HTMLCanvasElement} */ (this.root.querySelector(".overlay"));
+    this.baseContext =
+      /** @type {CanvasRenderingContext2D} */ (this.baseCanvas.getContext(
+        "2d",
+        { alpha: false },
+      ));
+    this.overlayContext =
+      /** @type {CanvasRenderingContext2D} */ (this.overlayCanvas.getContext(
+        "2d",
+      ));
     this.surface.addEventListener(
       "pointerdown",
       (event) => this.onPointerDown(event),
@@ -760,7 +811,9 @@ class PaintCanvas extends HTMLElement {
       sequence: 0,
       paintedCellCount: 0,
       brushSize: this.brushSize,
-      color: this.erase ? OPAQUE_WHITE : /** @type {number} */ (this.paintColor),
+      color: this.erase
+        ? OPAQUE_WHITE
+        : /** @type {number} */ (this.paintColor),
       opacity: this.erase ? 100 : this.opacity,
     };
     this.paintAnchor(anchor);

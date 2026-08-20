@@ -12,12 +12,21 @@ import {
 
 const environment = parseDatabaseEnvironment(Deno.args[0]);
 const confirmIndex = Deno.args.indexOf("--confirm");
-const confirmation = confirmIndex === -1 ? undefined : Deno.args[confirmIndex + 1];
+const confirmation = confirmIndex === -1
+  ? undefined
+  : Deno.args[confirmIndex + 1];
 if (confirmation !== environment.label) {
-  throw new Error(`refusing to clear ${environment.database}; pass --confirm ${environment.label}`);
+  throw new Error(
+    `refusing to clear ${environment.database}; pass --confirm ${environment.label}`,
+  );
 }
-if (environment.label === "Production" && !Deno.args.includes("--allow-production")) {
-  throw new Error("refusing to clear production; pass --allow-production as well");
+if (
+  environment.label === "Production" &&
+  !Deno.args.includes("--allow-production")
+) {
+  throw new Error(
+    "refusing to clear production; pass --allow-production as well",
+  );
 }
 
 const db = await openEnvironmentDatabase(environment);

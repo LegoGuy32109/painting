@@ -131,7 +131,12 @@ Deno.test("markSyncedAndGraduate just deletes (no history) when keepHistory is f
     clientTs: 1,
   });
 
-  await markSyncedAndGraduate(db, [{ localKey: key1, sequence: 1 }], "c4", false);
+  await markSyncedAndGraduate(
+    db,
+    [{ localKey: key1, sequence: 1 }],
+    "c4",
+    false,
+  );
 
   const history = await getFullHistory(db, "c4");
   assertEquals(history.length, 0);

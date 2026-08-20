@@ -6,20 +6,19 @@ This specification recreates the painting experience from xerca's Joy of
 Painting mod without Minecraft dependencies. It defines the paint tools,
 palette, canvas geometry, color math, and persistent pixel format.
 
-All colors use 8-bit ARGB integers. Write an opaque RGB color as
-`0xFFRRGGBB`. For example, red is `0xFFFF0000`. A transparent glass cell is
-`0x00000000`.
+All colors use 8-bit ARGB integers. Write an opaque RGB color as `0xFFRRGGBB`.
+For example, red is `0xFFFF0000`. A transparent glass cell is `0x00000000`.
 
 ## Canvas types
 
 Provide four canvas types. The pixel dimensions are fixed.
 
-| Type | Type code | Width | Height | Main cells |
-| --- | ---: | ---: | ---: | ---: |
-| Small | 0 | 16 | 16 | 256 |
-| Large | 1 | 32 | 32 | 1,024 |
-| Long | 2 | 32 | 16 | 512 |
-| Tall | 3 | 16 | 32 | 512 |
+| Type  | Type code | Width | Height | Main cells |
+| ----- | --------: | ----: | -----: | ---------: |
+| Small |         0 |    16 |     16 |        256 |
+| Large |         1 |    32 |     32 |      1,024 |
+| Long  |         2 |    32 |     16 |        512 |
+| Tall  |         3 |    16 |     32 |        512 |
 
 Each type has an opaque and a glass variant.
 
@@ -27,8 +26,8 @@ Each type has an opaque and a glass variant.
 - A new glass canvas fills every main cell with `0x00000000`.
 - Render glass cells over a checkerboard. This makes transparent cells clear
   during editing.
-- Render small canvas cells at 10 screen pixels each. Render every other
-  canvas at 5 screen pixels each.
+- Render small canvas cells at 10 screen pixels each. Render every other canvas
+  at 5 screen pixels each.
 
 ## Base palette
 
@@ -36,24 +35,24 @@ The base palette has 16 fixed wells. A well is unavailable until its matching
 dye has been added to the palette. Adding a dye records availability only. The
 dye does not act as a consumable paint quantity after it is added.
 
-| Index | Color name | Hex RGB |
-| ---: | --- | --- |
-| 0 | Black | `#1D1D21` |
-| 1 | Red | `#B02E26` |
-| 2 | Green | `#5E7C16` |
-| 3 | Brown | `#835432` |
-| 4 | Blue | `#3C44AA` |
-| 5 | Purple | `#8932B8` |
-| 6 | Cyan | `#169C9C` |
-| 7 | Light gray | `#9D9D97` |
-| 8 | Gray | `#474F52` |
-| 9 | Pink | `#F38BAA` |
-| 10 | Lime | `#80C71F` |
-| 11 | Yellow | `#FED83D` |
-| 12 | Light blue | `#3AB3DA` |
-| 13 | Magenta | `#C74EBD` |
-| 14 | Orange | `#F9801D` |
-| 15 | White | `#F9FFFE` |
+| Index | Color name | Hex RGB   |
+| ----: | ---------- | --------- |
+|     0 | Black      | `#1D1D21` |
+|     1 | Red        | `#B02E26` |
+|     2 | Green      | `#5E7C16` |
+|     3 | Brown      | `#835432` |
+|     4 | Blue       | `#3C44AA` |
+|     5 | Purple     | `#8932B8` |
+|     6 | Cyan       | `#169C9C` |
+|     7 | Light gray | `#9D9D97` |
+|     8 | Gray       | `#474F52` |
+|     9 | Pink       | `#F38BAA` |
+|    10 | Lime       | `#80C71F` |
+|    11 | Yellow     | `#FED83D` |
+|    12 | Light blue | `#3AB3DA` |
+|    13 | Magenta    | `#C74EBD` |
+|    14 | Orange     | `#F9801D` |
+|    15 | White      | `#F9FFFE` |
 
 The palette is full only when all 16 wells are available. When it is full,
 enable an eyedropper. The eyedropper samples the exact ARGB color from an
@@ -108,8 +107,8 @@ else:
 
 The result is opaque when painted. Store it as `0xFFRRGGBB`.
 
-This is not subtractive pigment mixing. It is a repeated average with an
-integer brightness gain. The same source color added twice has twice the weight.
+This is not subtractive pigment mixing. It is a repeated average with an integer
+brightness gain. The same source color added twice has twice the weight.
 
 ### Water behavior
 
@@ -122,8 +121,8 @@ Provide a water control on the palette.
 
 ## Painting controls
 
-The user selects a base well, a non-empty custom well, or the eyedropper.
-The selected color becomes the current paint color.
+The user selects a base well, a non-empty custom well, or the eyedropper. The
+selected color becomes the current paint color.
 
 ### Brush size
 
@@ -134,19 +133,19 @@ Each brush applies its offset list once per cell during one mouse drag. Keep a
 set of painted cell coordinates for the active drag. This prevents repeated
 mouse events from blending the same cell more than once in the same stroke.
 
-| Size | Cells per stamp | Offset list from the anchor |
-| ---: | ---: | --- |
-| 1 | 1 | `(0, 0)` |
-| 2 | 4 | `(0,0), (-1,0), (0,-1), (-1,-1)` |
-| 3 | 12 | `(-1,1), (0,1), (-2,0), (-1,0), (0,0), (1,0), (-2,-1), (-1,-1), (0,-1), (1,-1), (-1,-2), (0,-2)` |
-| 4 | 21 | `(-1,2), (0,2), (1,2), (-2,1), (-1,1), (0,1), (1,1), (2,1), (-2,0), (-1,0), (0,0), (1,0), (2,0), (-2,-1), (-1,-1), (0,-1), (1,-1), (2,-1), (-1,-2), (0,-2), (1,-2)` |
+| Size | Cells per stamp | Offset list from the anchor                                                                                                                                         |
+| ---: | --------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|    1 |               1 | `(0, 0)`                                                                                                                                                            |
+|    2 |               4 | `(0,0), (-1,0), (0,-1), (-1,-1)`                                                                                                                                    |
+|    3 |              12 | `(-1,1), (0,1), (-2,0), (-1,0), (0,0), (1,0), (-2,-1), (-1,-1), (0,-1), (1,-1), (-1,-2), (0,-2)`                                                                    |
+|    4 |              21 | `(-1,2), (0,2), (1,2), (-2,1), (-1,1), (0,1), (1,1), (2,1), (-2,0), (-1,0), (0,0), (1,0), (2,0), (-2,-1), (-1,-1), (0,-1), (1,-1), (2,-1), (-1,-2), (0,-2), (1,-2)` |
 
-For size 1 and size 4, anchor the brush at the cell under the cursor. For size
-2 and size 3, anchor it at the nearest grid corner. Do not paint offsets outside
+For size 1 and size 4, anchor the brush at the cell under the cursor. For size 2
+and size 3, anchor it at the nearest grid corner. Do not paint offsets outside
 the canvas.
 
-`@` marks the anchor cell. `#` marks another cell painted by the brush. `.` marks
-a cell inside the brush bounding box that the brush does not paint.
+`@` marks the anchor cell. `#` marks another cell painted by the brush. `.`
+marks a cell inside the brush bounding box that the brush does not paint.
 
 ```text
 Brush 1
@@ -188,15 +187,15 @@ cells. It therefore includes the unpainted corner cells shown as `.` in the
 brush 3 and brush 4 diagrams.
 
 | Brush size | Perimeter size in cells |
-| ---: | --- |
-| 1 | 1 × 1 |
-| 2 | 2 × 2 |
-| 3 | 4 × 4 |
-| 4 | 5 × 5 |
+| ---------: | ----------------------- |
+|          1 | 1 × 1                   |
+|          2 | 2 × 2                   |
+|          3 | 4 × 4                   |
+|          4 | 5 × 5                   |
 
 For a rendered canvas cell size `s`, draw the perimeter at
-`boundingBoxCells × s + 2` pixels in each dimension. The extra two pixels make
-a one-pixel border on every side.
+`boundingBoxCells × s + 2` pixels in each dimension. The extra two pixels make a
+one-pixel border on every side.
 
 ### Opacity
 
@@ -204,11 +203,11 @@ Provide four brush opacity settings. The original UI uses the mouse wheel over
 the opacity control. It wraps after the last setting.
 
 | Setting | Opacity `p` |
-| ---: | ---: |
-| 1 | 1.00 |
-| 2 | 0.75 |
-| 3 | 0.50 |
-| 4 | 0.25 |
+| ------: | ----------: |
+|       1 |        1.00 |
+|       2 |        0.75 |
+|       3 |        0.50 |
+|       4 |        0.25 |
 
 ## Cell blending
 
@@ -294,8 +293,8 @@ behavior matters:
 ```
 
 Increment `version` whenever the client commits an edit. Use `generation` to
-track copies: 0 for an unsigned or empty work, 1 for the original signed work,
-2 for a copy of the original, and 3 or greater for later-generation copies.
+track copies: 0 for an unsigned or empty work, 1 for the original signed work, 2
+for a copy of the original, and 3 or greater for later-generation copies.
 
 For a save format compatible with the exported `.paint` structure, write a
 binary NBT compound with these fields:

@@ -80,7 +80,8 @@ export function initSync(canvasElement) {
         listPendingLocalEvents(db, id),
       ]);
       const pixels = composeCanvas([...history, ...pending]);
-      const restorable = /** @type {{ loadPixels?: (p: Int32Array) => void }} */ (canvasElement);
+      const restorable =
+        /** @type {{ loadPixels?: (p: Int32Array) => void }} */ (canvasElement);
       restorable.loadPixels?.(pixels);
     })();
   }

@@ -102,7 +102,10 @@ function diffChunk(
 ): Uint8Array {
   const batches = events
     .filter((e) => e.kind === "stroke" && e.cells)
-    .map((e) => ({ ts: e.clientTs, cells: decodeCells(e.cells as Uint8Array) }));
+    .map((e) => ({
+      ts: e.clientTs,
+      cells: decodeCells(e.cells as Uint8Array),
+    }));
   const payload = JSON.stringify({ type: "diff", batches });
   return new TextEncoder().encode(`data: ${payload}\n\n`);
 }
@@ -196,7 +199,10 @@ async function withComposedPixels(
   return Promise.all(canvases.map(async (canvas) => {
     const { events } = await pullEventsSince(getDb(), canvas.id, 0);
     const composed = composeCanvas(events as CanvasEventRow[]);
-    return { ...canvas, pixels: bytesToBase64(new Uint8Array(composed.buffer)) };
+    return {
+      ...canvas,
+      pixels: bytesToBase64(new Uint8Array(composed.buffer)),
+    };
   }));
 }
 
@@ -212,7 +218,12 @@ export async function handler(req: Request): Promise<Response> {
   try {
     return await route(req);
   } catch (err) {
-    console.error("unhandled error handling request:", req.method, req.url, err);
+    console.error(
+      "unhandled error handling request:",
+      req.method,
+      req.url,
+      err,
+    );
     return new Response("internal error", { status: 500 });
   }
 }

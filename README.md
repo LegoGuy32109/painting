@@ -4,8 +4,8 @@ A browser-based pixel painting app inspired by xerca's
 [Joy of Painting](https://modrinth.com/mod/joy-of-painting) Minecraft mod. It
 recreates the painting experience without Minecraft dependencies.
 
-The paint rules and interface reference live in [the interface
-specification](docs/joy-of-painting-interface-spec.md).
+The paint rules and interface reference live in
+[the interface specification](docs/joy-of-painting-interface-spec.md).
 
 ## Project layout
 
@@ -29,38 +29,39 @@ deno task check
 deno task test
 ```
 
-`deno task check` recursively type-checks every authored JavaScript,
-TypeScript, and declaration file in `src/` and `tests/`.
+`deno task check` recursively type-checks every authored JavaScript, TypeScript,
+and declaration file in `src/` and `tests/`.
 
 `deno task test` runs the test suite with only the read permissions it needs.
 
 ## Database lifecycle
 
-`painting-local` is for one developer's durable local work. `painting-dev` is
-an intentionally disposable shared preview database: when its schema changes,
+`painting-local` is for one developer's durable local work. `painting-dev` is an
+intentionally disposable shared preview database: when its schema changes,
 recreate it and run `deno task bootstrap:dev` with `TURSO_DB_URL` and
 `TURSO_DB_TOKEN` set to the new `painting-dev` credentials. Do not add or run
 incremental migrations for dev work.
 
 `painting-prod` is durable. Its schema is defined by `migrations/`. Until the
 first production release, `001_initial.sql` is the editable current bootstrap
-schema; once production applies it, every applied migration is immutable.
-After production approval and before deploying code that needs a new schema,
-run `deno task migrate:prod --dry-run`, then
-`deno task migrate:prod`, with production Turso credentials set in the shell.
-The runner records applied versions and refuses a changed migration file.
+schema; once production applies it, every applied migration is immutable. After
+production approval and before deploying code that needs a new schema, run
+`deno task migrate:prod --dry-run`, then `deno task migrate:prod`, with
+production Turso credentials set in the shell. The runner records applied
+versions and refuses a changed migration file.
 
-See [the database guide](docs/turso-databases.md) before creating, resetting,
-or migrating a database.
+See [the database guide](docs/turso-databases.md) before creating, resetting, or
+migrating a database.
 
-`deno task backup:db Development` writes a local JSON backup of
-`painting-dev`; `Prod` and `Preview` are also accepted. It needs credentials
-for the selected database: the scripts use `TURSO_API_KEY` and
-`TURSO_ORG_SLUG` to resolve it and mint a connection token used only by the
-current process, or accept matching `TURSO_DB_URL`/`TURSO_DB_TOKEN` explicitly.
+`deno task backup:db Development` writes a local JSON backup of `painting-dev`;
+`Prod` and `Preview` are also accepted. It needs credentials for the selected
+database: the scripts use `TURSO_API_KEY` and `TURSO_ORG_SLUG` to resolve it and
+mint a connection token used only by the current process, or accept matching
+`TURSO_DB_URL`/`TURSO_DB_TOKEN` explicitly.
 `deno task clear:db Development
---confirm Development` removes all paintings from that database but preserves
-its schema. The clear command also requires `--allow-production` for `Prod`.
+--confirm Development` removes all paintings
+from that database but preserves its schema. The clear command also requires
+`--allow-production` for `Prod`.
 
 ## Browser code conventions
 

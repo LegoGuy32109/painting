@@ -8,7 +8,9 @@ export interface DatabaseEnvironment {
  * currently both use painting-dev, while the Deno Deploy API presents the
  * dev-branch timeline as Preview.
  */
-export function parseDatabaseEnvironment(value: string | undefined): DatabaseEnvironment {
+export function parseDatabaseEnvironment(
+  value: string | undefined,
+): DatabaseEnvironment {
   switch (value?.toLowerCase()) {
     case "prod":
     case "production":
@@ -28,11 +30,15 @@ interface DatabaseCredentials {
   token: string;
 }
 
-function explicitCredentials(environment: DatabaseEnvironment): DatabaseCredentials | null {
+function explicitCredentials(
+  environment: DatabaseEnvironment,
+): DatabaseCredentials | null {
   const url = Deno.env.get("TURSO_DB_URL");
   const token = Deno.env.get("TURSO_DB_TOKEN");
   if (url && token) {
-    if (url.startsWith(`libsql://${environment.database}-`)) return { url, token };
+    if (url.startsWith(`libsql://${environment.database}-`)) {
+      return { url, token };
+    }
     // .env normally holds painting-local credentials. They are not an error
     // when the requested target is another environment; use the admin path.
     return null;
@@ -43,7 +49,9 @@ function explicitCredentials(environment: DatabaseEnvironment): DatabaseCredenti
   return null;
 }
 
-async function adminCredentials(environment: DatabaseEnvironment): Promise<DatabaseCredentials> {
+async function adminCredentials(
+  environment: DatabaseEnvironment,
+): Promise<DatabaseCredentials> {
   const apiKey = Deno.env.get("TURSO_API_KEY");
   const org = Deno.env.get("TURSO_ORG_SLUG");
   if (!apiKey || !org) {
@@ -52,11 +60,20 @@ async function adminCredentials(environment: DatabaseEnvironment): Promise<Datab
     );
   }
   const headers = { Authorization: `Bearer ${apiKey}` };
-  const databases = await fetch(`https://api.turso.tech/v1/organizations/${org}/databases`, { headers });
-  if (!databases.ok) throw new Error(`could not list Turso databases: ${databases.status}`);
+  const databases = await fetch(
+    `https://api.turso.tech/v1/organizations/${org}/databases`,
+    { headers },
+  );
+  if (!databases.ok) {
+    throw new Error(`could not list Turso databases: ${databases.status}`);
+  }
   const result = await databases.json();
-  const database = result.databases.find((entry: { Name: string }) => entry.Name === environment.database);
-  if (!database?.Hostname) throw new Error(`${environment.database} does not exist in Turso`);
+  const database = result.databases.find((entry: { Name: string }) =>
+    entry.Name === environment.database
+  );
+  if (!database?.Hostname) {
+    throw new Error(`${environment.database} does not exist in Turso`);
+  }
 
   // Turso's management endpoint returns a database JWT here. Its value is
   // kept only in this process and never logged or written to disk, although
@@ -65,14 +82,25 @@ async function adminCredentials(environment: DatabaseEnvironment): Promise<Datab
     `https://api.turso.tech/v1/organizations/${org}/databases/${environment.database}/auth/tokens?expiration=never&authorization=full-access`,
     { method: "POST", headers },
   );
-  if (!tokenResponse.ok) throw new Error(`could not mint ${environment.database} access token: ${tokenResponse.status}`);
+  if (!tokenResponse.ok) {
+    throw new Error(
+      `could not mint ${environment.database} access token: ${tokenResponse.status}`,
+    );
+  }
   const tokenResult = await tokenResponse.json();
-  if (!tokenResult.jwt) throw new Error(`Turso did not return an access token for ${environment.database}`);
+  if (!tokenResult.jwt) {
+    throw new Error(
+      `Turso did not return an access token for ${environment.database}`,
+    );
+  }
   return { url: `libsql://${database.Hostname}`, token: tokenResult.jwt };
 }
 
-export async function openEnvironmentDatabase(environment: DatabaseEnvironment): Promise<Client> {
-  const credentials = explicitCredentials(environment) ?? await adminCredentials(environment);
+export async function openEnvironmentDatabase(
+  environment: DatabaseEnvironment,
+): Promise<Client> {
+  const credentials = explicitCredentials(environment) ??
+    await adminCredentials(environment);
   return createClient({ url: credentials.url, authToken: credentials.token });
 }
 
@@ -80,4 +108,4 @@ export function backupFileName(environment: DatabaseEnvironment): string {
   const timestamp = new Date().toISOString().replaceAll(":", "-");
   return `backups/${environment.database}-${timestamp}.json`;
 }
-import { createClient, type Client } from "@tursodatabase/serverless/compat";
+import { type Client, createClient } from "@tursodatabase/serverless/compat";

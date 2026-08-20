@@ -27,7 +27,9 @@ function expectedPixels(events) {
 for (const recording of fixtures.recordings) {
   Deno.test(`live replay keeps ${recording.title}'s ${recording.events.length} recorded batches in paint order`, () => {
     /** @type {FixtureEvent[]} */
-    const strokes = recording.events.filter((event) => event.kind === "stroke" && event.cells);
+    const strokes = recording.events.filter((event) =>
+      event.kind === "stroke" && event.cells
+    );
     const replay = new LiveReplay();
     const receivedAt = 10_000;
 
@@ -49,7 +51,9 @@ for (const recording of fixtures.recordings) {
 }
 
 Deno.test("live replay recovers from snake in clouds' undo snapshot without retaining stale queued strokes", () => {
-  const recording = fixtures.recordings.find((entry) => entry.title === "snake in clouds");
+  const recording = fixtures.recordings.find((entry) =>
+    entry.title === "snake in clouds"
+  );
   if (!recording) throw new Error("snake in clouds fixture is missing");
 
   const replay = new LiveReplay();

@@ -171,20 +171,19 @@
             data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
             data-on:palette-state-changed="$palette = evt.detail.palette; $paint.selection = evt.detail.selection"
           ></paint-palette>
-
         </section>
       </div>
     </main>
     <script type="module">
-      import { initSync } from "/sync.js";
+    import { initSync } from "/sync.js";
 
-      const canvas = document.querySelector("paint-canvas");
-      const sync = initSync(canvas);
+    const canvas = document.querySelector("paint-canvas");
+    const sync = initSync(canvas);
 
-      document.getElementById("sign-button").addEventListener("click", () => {
-        const title = prompt("Title your painting (16 characters max):");
-        if (title) sync.sign(title.slice(0, 16));
-      });
+    document.getElementById("sign-button").addEventListener("click", () => {
+      const title = prompt("Title your painting (16 characters max):");
+      if (title) sync.sign(title.slice(0, 16));
+    });
     </script>
   </body>
 </html>

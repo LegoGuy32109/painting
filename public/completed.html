@@ -4,64 +4,89 @@
     <meta charset="UTF-8">
     <title>dev: signed paintings</title>
     <style>
-      body { font-family: monospace; background: #111; color: #eee; margin: 0; padding: 1rem; }
-      h1 { font-size: 1rem; opacity: .6; }
-      .grid {
-        display: grid; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
-        gap: 1rem;
-      }
-      .card { border: 1px solid #444; border-radius: .25rem; padding: .5rem .75rem; }
-      canvas { image-rendering: pixelated; width: 100%; aspect-ratio: 1; border: 1px solid #333; }
-      .title { font-weight: bold; margin-top: .5rem; }
-      .completed-at { opacity: .5; font-size: .85em; }
+    body {
+      font-family: monospace;
+      background: #111;
+      color: #eee;
+      margin: 0;
+      padding: 1rem;
+    }
+    h1 {
+      font-size: 1rem;
+      opacity: .6;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+      gap: 1rem;
+    }
+    .card {
+      border: 1px solid #444;
+      border-radius: .25rem;
+      padding: .5rem .75rem;
+    }
+    canvas {
+      image-rendering: pixelated;
+      width: 100%;
+      aspect-ratio: 1;
+      border: 1px solid #333;
+    }
+    .title {
+      font-weight: bold;
+      margin-top: .5rem;
+    }
+    .completed-at {
+      opacity: .5;
+      font-size: .85em;
+    }
     </style>
   </head>
   <body>
     <h1>signed paintings (completed_at is not null) — final composed image, doesn't change again</h1>
     <div class="grid" id="grid"></div>
     <script type="module">
-      import { CANVAS_WIDTH, CANVAS_HEIGHT } from "/paint-engine.js";
+    import { CANVAS_HEIGHT, CANVAS_WIDTH } from "/paint-engine.js";
 
-      /** @param {string} base64 @param {HTMLCanvasElement} canvasEl */
-      function drawPixels(base64, canvasEl) {
-        canvasEl.width = CANVAS_WIDTH;
-        canvasEl.height = CANVAS_HEIGHT;
-        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-        const pixels = new Int32Array(bytes.buffer);
-        const ctx = canvasEl.getContext("2d");
-        const image = ctx.createImageData(CANVAS_WIDTH, CANVAS_HEIGHT);
-        for (let i = 0; i < pixels.length; i++) {
-          const argb = pixels[i];
-          image.data[i * 4] = (argb >>> 16) & 0xff;
-          image.data[i * 4 + 1] = (argb >>> 8) & 0xff;
-          image.data[i * 4 + 2] = argb & 0xff;
-          image.data[i * 4 + 3] = (argb >>> 24) & 0xff;
-        }
-        ctx.putImageData(image, 0, 0);
+    /** @param {string} base64 @param {HTMLCanvasElement} canvasEl */
+    function drawPixels(base64, canvasEl) {
+      canvasEl.width = CANVAS_WIDTH;
+      canvasEl.height = CANVAS_HEIGHT;
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const pixels = new Int32Array(bytes.buffer);
+      const ctx = canvasEl.getContext("2d");
+      const image = ctx.createImageData(CANVAS_WIDTH, CANVAS_HEIGHT);
+      for (let i = 0; i < pixels.length; i++) {
+        const argb = pixels[i];
+        image.data[i * 4] = (argb >>> 16) & 0xff;
+        image.data[i * 4 + 1] = (argb >>> 8) & 0xff;
+        image.data[i * 4 + 2] = argb & 0xff;
+        image.data[i * 4 + 3] = (argb >>> 24) & 0xff;
       }
+      ctx.putImageData(image, 0, 0);
+    }
 
-      const grid = document.getElementById("grid");
+    const grid = document.getElementById("grid");
 
-      const res = await fetch("/dev/api/completed");
-      const { canvases } = await res.json();
-      grid.replaceChildren(...canvases.map((c) => {
-        const card = document.createElement("div");
-        card.className = "card";
+    const res = await fetch("/dev/api/completed");
+    const { canvases } = await res.json();
+    grid.replaceChildren(...canvases.map((c) => {
+      const card = document.createElement("div");
+      card.className = "card";
 
-        const canvasEl = document.createElement("canvas");
-        drawPixels(c.pixels, canvasEl);
+      const canvasEl = document.createElement("canvas");
+      drawPixels(c.pixels, canvasEl);
 
-        const title = document.createElement("div");
-        title.className = "title";
-        title.textContent = c.title ?? "(untitled)";
+      const title = document.createElement("div");
+      title.className = "title";
+      title.textContent = c.title ?? "(untitled)";
 
-        const when = document.createElement("div");
-        when.className = "completed-at";
-        when.textContent = new Date(c.completedAt).toLocaleString();
+      const when = document.createElement("div");
+      when.className = "completed-at";
+      when.textContent = new Date(c.completedAt).toLocaleString();
 
-        card.append(canvasEl, title, when);
-        return card;
-      }));
+      card.append(canvasEl, title, when);
+      return card;
+    }));
     </script>
   </body>
 </html>

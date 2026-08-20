@@ -31,7 +31,10 @@ async function api(path: string, options: RequestInit = {}) {
     },
   });
   if (!res.ok) {
-    throw new Error(`${options.method ?? "GET"} ${path} -> ${res.status}: ${await res.text()}`);
+    throw new Error(
+      `${options.method ?? "GET"} ${path} -> ${res.status}: ${await res
+        .text()}`,
+    );
   }
   return res.json();
 }
@@ -53,7 +56,9 @@ async function createToken(name: string): Promise<string> {
 }
 
 async function deleteDatabase(name: string): Promise<void> {
-  await api(`/organizations/${orgSlug}/databases/${name}`, { method: "DELETE" });
+  await api(`/organizations/${orgSlug}/databases/${name}`, {
+    method: "DELETE",
+  });
 }
 
 const name = `painting-test-${slug()}`;
@@ -74,7 +79,13 @@ try {
   console.log(`Migrated ${name}, running tests...`);
 
   const testProcess = new Deno.Command(Deno.execPath(), {
-    args: ["test", "--allow-net", "--allow-env", "--allow-read", "tests/db_test.ts"],
+    args: [
+      "test",
+      "--allow-net",
+      "--allow-env",
+      "--allow-read",
+      "tests/db_test.ts",
+    ],
     env: { ...Deno.env.toObject(), TURSO_DB_URL: dbUrl, TURSO_DB_TOKEN: token },
     stdout: "inherit",
     stderr: "inherit",

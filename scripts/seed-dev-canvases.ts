@@ -6,7 +6,12 @@
 //
 // Usage: deno run --allow-net --allow-env scripts/seed-dev-canvases.ts
 
-import { appendEvents, completeCanvas, createCanvas, createDb } from "../src/server/db.ts";
+import {
+  appendEvents,
+  completeCanvas,
+  createCanvas,
+  createDb,
+} from "../src/server/db.ts";
 import { ulid } from "../src/server/ulid.ts";
 import { createPixels } from "../src/client/paint-engine.js";
 import { encodeCells } from "../src/client/cell-codec.js";
@@ -23,7 +28,13 @@ function diagonalStreak(argb: number): Array<[number, number]> {
 
 async function seedActive() {
   const id = ulid();
-  await createCanvas(db, id, "dev-owner", new Uint8Array(createPixels().buffer), now);
+  await createCanvas(
+    db,
+    id,
+    "dev-owner",
+    new Uint8Array(createPixels().buffer),
+    now,
+  );
   await appendEvents(
     url,
     token,
@@ -43,7 +54,13 @@ async function seedActive() {
 
 async function seedCompleted(title: string) {
   const id = ulid();
-  await createCanvas(db, id, "dev-owner", new Uint8Array(createPixels().buffer), now);
+  await createCanvas(
+    db,
+    id,
+    "dev-owner",
+    new Uint8Array(createPixels().buffer),
+    now,
+  );
   await appendEvents(
     url,
     token,

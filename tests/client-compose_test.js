@@ -10,7 +10,12 @@ import { createPixels } from "../src/client/paint-engine.js";
 
 /** @param {string} strokeId @param {Array<[number, number]>} cells */
 function strokeEvent(strokeId, cells) {
-  return { kind: "stroke", strokeId, cells: encodeCells(cells), revertsId: null };
+  return {
+    kind: "stroke",
+    strokeId,
+    cells: encodeCells(cells),
+    revertsId: null,
+  };
 }
 
 /** @param {string} revertsId */

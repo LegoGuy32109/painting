@@ -49,19 +49,26 @@ const trpcClient = createTrpcClient({
   nonInteractive: true as const,
 });
 
-const app = await trpcClient.query("apps.get", { org: ORG, app: APP }) as { id: string };
-const contexts = await trpcClient.query("envVarsContexts.listContexts", { org: ORG }) as
-  { id: string; name: string }[];
+const app = await trpcClient.query("apps.get", { org: ORG, app: APP }) as {
+  id: string;
+};
+const contexts = await trpcClient.query("envVarsContexts.listContexts", {
+  org: ORG,
+}) as { id: string; name: string }[];
 
 const target = contexts.find((c) => c.name === contextName);
 if (!target) {
   throw new Error(
-    `Context "${contextName}" not found. Known contexts: ${contexts.map((c) => c.name).join(", ")}`,
+    `Context "${contextName}" not found. Known contexts: ${
+      contexts.map((c) => c.name).join(", ")
+    }`,
   );
 }
 
-const existing = await trpcClient.query("envVarsContexts.list", { org: ORG, app: APP }) as
-  { id: string; key: string; context_ids: string[] | null }[];
+const existing = await trpcClient.query("envVarsContexts.list", {
+  org: ORG,
+  app: APP,
+}) as { id: string; key: string; context_ids: string[] | null }[];
 const current = existing.find((variable) =>
   variable.key === key &&
   (variable.context_ids === null || variable.context_ids.includes(target.id))
@@ -79,4 +86,7 @@ const result = await trpcClient.mutation("envVarsContexts.updateEnvVars", {
   remove: [],
 });
 
-console.log(`${current ? "Updated" : "Set"} ${key} (${contextName}):`, JSON.stringify(result));
+console.log(
+  `${current ? "Updated" : "Set"} ${key} (${contextName}):`,
+  JSON.stringify(result),
+);
