@@ -27,12 +27,15 @@ Keep authored runtime code in `src/`, tests in `tests/`, static assets in
 deno task dev
 deno task check
 deno task test
+deno task save "feat: describe the change"
 ```
 
 `deno task check` recursively type-checks every authored JavaScript, TypeScript,
 and declaration file in `src/` and `tests/`.
 
 `deno task test` runs the test suite with only the read permissions it needs.
+`deno task save` formats, type-checks, commits, and pushes; it requires a commit
+message and warns when run on `master`.
 
 ## Database lifecycle
 

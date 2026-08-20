@@ -50,6 +50,8 @@ wrong context if you don't check its result before chaining the next command).
 - `scripts/backup-environment-db.ts` and `clear-environment-db.ts` — backup or
   clear a named deployment database. Read `docs/turso-databases.md` before using
   either; clearing requires explicit confirmation.
+- `scripts/save.ts` (`deno task save "message"`) — formats, type-checks,
+  commits, and pushes the current branch. It warns when the branch is master.
 - `scripts/set-deploy-env.ts` — sets one Deno Deploy env var scoped to one
   context. Use this, not `deno deploy env add`, for anything that needs a
   different value per context (see `docs/deno-deploy-env-vars.md` for why).

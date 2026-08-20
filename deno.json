@@ -11,6 +11,7 @@
     "bootstrap:dev": "deno run --env-file --allow-net --allow-env --allow-read scripts/bootstrap-dev-db.ts",
     "backup:db": "deno run --env-file --allow-net --allow-env --allow-read --allow-write scripts/backup-environment-db.ts",
     "clear:db": "deno run --env-file --allow-net --allow-env scripts/clear-environment-db.ts",
+    "save": "deno run --allow-run --allow-read --allow-write scripts/save.ts",
     "seed:dev": "deno run --allow-net --allow-env scripts/seed-dev-canvases.ts"
   },
   "compilerOptions": {
