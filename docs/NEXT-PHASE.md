@@ -107,8 +107,8 @@ The phase does not add persistence, accounts, or new client dependencies.
 - Keep canvas pixels and stroke history private to `<paint-canvas>`.
 - Keep browser code as direct ES modules with no additional dependencies or
   build step.
-- Use `// @ts-check` and extend `paint-types.d.ts` for new event and palette
-  shapes.
+- Use `// @ts-check` and extend `src/shared/paint-types.d.ts` for new event and
+  palette shapes.
 - Keep each interaction's state local to `<paint-palette>` until it emits a
   completed state change. It may render optimistically before the DataStar
   attribute update confirms the state.

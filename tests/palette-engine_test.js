@@ -7,7 +7,7 @@ import {
   colorFromWell,
   emptyWell,
   rgbFromHex,
-} from "../src/client/palette-engine.js";
+} from "../src/shared/palette-engine.js";
 
 Deno.test("custom wells start empty and display the specified empty color", () => {
   assertEquals(emptyWell(), {

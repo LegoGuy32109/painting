@@ -6,23 +6,61 @@ import {
   completeCanvas,
   createDb,
   ensureCanvas,
-  type EventKind,
-  getCanvasOwnerId,
+  eventAcknowledgments,
+  getCanvasAccess,
   headSequence,
   listActiveCanvases,
   listRecentlyCompleted,
   type NewEvent,
   pullEventsSince,
 } from "./db.ts";
-import { ulid } from "./ulid.ts";
-import { createPixels } from "../client/paint-engine.js";
-import { decodeCells } from "../client/cell-codec.js";
-import { composeCanvas } from "./compose.ts";
+import { createPixels } from "../shared/paint-engine.js";
+import { decodeCells } from "../shared/cell-codec.js";
+import { composeCanvas } from "../shared/compose.js";
+import {
+  assertGuestSessionConfigured,
+  guestSession,
+  withSessionCookie,
+} from "./guest-session.ts";
+import {
+  assertCanvasId,
+  assertSameOrigin,
+  HttpError,
+  readJsonBody,
+  validateCompletion,
+  validatePushEvents,
+} from "./protocol.ts";
+import { consumeGuestMutation } from "./rate-limit.ts";
+import type { PushEventsResponse } from "../shared/paint-types.d.ts";
 
 const publicFile = (path: string) =>
   new URL(`../../public/${path}`, import.meta.url);
 const clientFile = (path: string) =>
   new URL(`../client/${path}`, import.meta.url);
+const sharedFile = (path: string) =>
+  new URL(`../shared/${path}`, import.meta.url);
+
+function staticHeaders(contentType: string, immutable = false): HeadersInit {
+  return {
+    "content-type": contentType,
+    "cache-control": immutable
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=3600, stale-while-revalidate=86400",
+    "deno-cdn-cache-control": "public, s-maxage=31536000",
+  };
+}
+
+function htmlHeaders(): HeadersInit {
+  return {
+    "content-type": "text/html",
+    "cache-control": "no-cache",
+    "deno-cdn-cache-control": "public, s-maxage=60",
+    "content-security-policy":
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+      "style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; " +
+      "img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  };
+}
 
 // Created lazily (not at module load) so importing this module — as
 // tests/main_test.ts does — doesn't require TURSO_DB_URL/TURSO_DB_TOKEN or
@@ -179,28 +217,24 @@ function ensurePolling(canvasId: string): void {
 // has confirmed a canvas exists, skip re-asking Turso.
 const ensuredCanvases = new Set<string>();
 
-// Single-writer enforcement: cached per-canvas so a repainting client isn't
-// hitting the db on every push just to re-confirm what it already confirmed.
-// Multiplayer painting isn't a goal here — only the device that created a
-// canvas (its stored owner_id) may push events or complete it.
-const canvasOwners = new Map<string, string | null>();
-
-async function ownerOfCanvas(canvasId: string): Promise<string | null> {
-  const cached = canvasOwners.get(canvasId);
-  if (cached !== undefined) return cached;
-  const owner = await getCanvasOwnerId(getDb(), canvasId);
-  canvasOwners.set(canvasId, owner);
-  return owner;
+// Re-check ownership and completion for every mutation. Multiplayer painting
+// isn't a goal here: only the signed guest profile that created a canvas may
+// push events or complete it, and a completed canvas is immutable.
+async function accessOfCanvas(canvasId: string) {
+  return await getCanvasAccess(getDb(), canvasId);
 }
 
 async function withComposedPixels(
   canvases: CanvasSummary[],
-): Promise<Array<CanvasSummary & { pixels: string }>> {
+): Promise<
+  Array<Omit<CanvasSummary, "ownerId"> & { pixels: string }>
+> {
   return Promise.all(canvases.map(async (canvas) => {
     const { events } = await pullEventsSince(getDb(), canvas.id, 0);
     const composed = composeCanvas(events as CanvasEventRow[]);
+    const { ownerId: _ownerId, ...publicCanvas } = canvas;
     return {
-      ...canvas,
+      ...publicCanvas,
       pixels: bytesToBase64(new Uint8Array(composed.buffer)),
     };
   }));
@@ -216,8 +250,20 @@ async function withComposedPixels(
  */
 export async function handler(req: Request): Promise<Response> {
   try {
-    return await route(req);
+    const response = await route(req);
+    const headers = new Headers(response.headers);
+    headers.set("x-content-type-options", "nosniff");
+    headers.set("referrer-policy", "same-origin");
+    headers.set("x-frame-options", "DENY");
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   } catch (err) {
+    if (err instanceof HttpError) {
+      return new Response(err.message, { status: err.status });
+    }
     console.error(
       "unhandled error handling request:",
       req.method,
@@ -234,34 +280,43 @@ async function route(req: Request): Promise<Response> {
   const eventsMatch = url.pathname.match(/^\/canvases\/([^/]+)\/events$/);
   if (eventsMatch && req.method === "POST") {
     const canvasId = eventsMatch[1];
-    const body = await req.json();
-    const ownerId = req.headers.get("x-owner-id") ?? body.ownerId ?? null;
+    assertCanvasId(canvasId);
+    assertSameOrigin(req);
+    const session = await guestSession(req, false);
+    if (!session) throw new HttpError(401, "guest session required");
+    const body = validatePushEvents(await readJsonBody(req));
+    const mutationCost = 1 + Math.ceil(body.events.length / 8);
+    if (!consumeGuestMutation(session.guestId, mutationCost)) {
+      return new Response("too many write requests", {
+        status: 429,
+        headers: { "retry-after": "1" },
+      });
+    }
     const now = Date.now();
 
     if (!ensuredCanvases.has(canvasId)) {
-      await ensureCanvas(getDb(), canvasId, ownerId, blankPixels(), now);
+      await ensureCanvas(
+        getDb(),
+        canvasId,
+        session.guestId,
+        blankPixels(),
+        now,
+      );
       ensuredCanvases.add(canvasId);
-      canvasOwners.delete(canvasId); // re-resolve: this push may have just created the row
     }
 
-    const knownOwner = await ownerOfCanvas(canvasId);
-    if (knownOwner && ownerId && knownOwner !== ownerId) {
+    const access = await accessOfCanvas(canvasId);
+    if (!access || access.ownerId !== session.guestId) {
       return new Response("forbidden: canvas is owned by a different client", {
         status: 403,
       });
     }
+    if (access.completedAt !== null) {
+      return new Response("canvas is already signed", { status: 409 });
+    }
 
-    const rawEvents: Array<{
-      id: string;
-      kind: EventKind;
-      strokeId: string | null;
-      cells: string | null;
-      revertsId: string | null;
-      clientTs: number;
-    }> = body.events ?? [];
-
-    if (rawEvents.length > 0) {
-      const events: NewEvent[] = rawEvents.map((e) => ({
+    if (body.events.length > 0) {
+      const events: NewEvent[] = body.events.map((e) => ({
         id: e.id,
         kind: e.kind,
         strokeId: e.strokeId ?? null,
@@ -275,7 +330,7 @@ async function route(req: Request): Promise<Response> {
         token,
         canvasId,
         events,
-        !!body.heartbeatActive,
+        body.heartbeatActive,
         now,
       );
       // Fire-and-forget by design (a slow SSE fan-out must not gate the
@@ -294,12 +349,40 @@ async function route(req: Request): Promise<Response> {
         args: [body.heartbeatActive ? 1 : 0, canvasId],
       });
     }
-    return Response.json({ ok: true });
+    const acknowledgments = await eventAcknowledgments(
+      getDb(),
+      canvasId,
+      body.events.map((event) => event.id),
+    );
+    const response: PushEventsResponse = {
+      ok: true,
+      acknowledgments,
+      headSequence: await headSequence(getDb(), canvasId),
+    };
+    if (acknowledgments.length !== body.events.length) {
+      return new Response("canvas was signed while events were saving", {
+        status: 409,
+      });
+    }
+    return Response.json(response);
   }
 
   if (eventsMatch && req.method === "GET") {
     const canvasId = eventsMatch[1];
+    assertCanvasId(canvasId);
+    const session = await guestSession(req, false);
+    if (!session) throw new HttpError(401, "guest session required");
+    const access = await accessOfCanvas(canvasId);
+    if (!access || access.ownerId !== session.guestId) {
+      throw new HttpError(
+        403,
+        "forbidden: canvas is owned by a different client",
+      );
+    }
     const since = Number(url.searchParams.get("since") ?? "0");
+    if (!Number.isSafeInteger(since) || since < 0) {
+      throw new HttpError(400, "since must be a non-negative integer");
+    }
     const { events, headSequence } = await pullEventsSince(
       getDb(),
       canvasId,
@@ -323,34 +406,38 @@ async function route(req: Request): Promise<Response> {
   const completeMatch = url.pathname.match(/^\/canvases\/([^/]+)\/complete$/);
   if (completeMatch && req.method === "POST") {
     const canvasId = completeMatch[1];
-    const ownerId = req.headers.get("x-owner-id");
-    const knownOwner = await ownerOfCanvas(canvasId);
-    if (knownOwner && ownerId && knownOwner !== ownerId) {
+    assertCanvasId(canvasId);
+    assertSameOrigin(req);
+    const session = await guestSession(req, false);
+    if (!session) throw new HttpError(401, "guest session required");
+    const body = validateCompletion(await readJsonBody(req));
+    if (!consumeGuestMutation(session.guestId)) {
+      return new Response("too many write requests", {
+        status: 429,
+        headers: { "retry-after": "1" },
+      });
+    }
+    const access = await accessOfCanvas(canvasId);
+    if (!access || access.ownerId !== session.guestId) {
       return new Response("forbidden: canvas is owned by a different client", {
         status: 403,
       });
     }
-    const body = await req.json();
+    if (access.completedAt !== null) {
+      return new Response("canvas is already signed", { status: 409 });
+    }
     const now = Date.now();
-    await completeCanvas(getDb(), canvasId, body.title, now);
-    const { url: dbUrl, token } = getDbCreds();
-    await appendEvents(
-      dbUrl,
-      token,
-      canvasId,
-      [{ id: ulid(now), kind: "complete", clientTs: now }],
-      false,
-      now,
-    );
-    // No broadcastEvents here: a 'complete' event carries no cells and
-    // doesn't change the image. Viewers drop it from /dev/active on their
-    // next list poll and close their own stream.
+    const completed = await completeCanvas(getDb(), canvasId, body.title, now);
+    if (!completed) {
+      return new Response("canvas is already signed", { status: 409 });
+    }
     return Response.json({ ok: true });
   }
 
   const streamMatch = url.pathname.match(/^\/canvases\/([^/]+)\/stream$/);
   if (streamMatch && req.method === "GET") {
     const canvasId = streamMatch[1];
+    assertCanvasId(canvasId);
     let keepAlive: ReturnType<typeof setInterval>;
     let thisController: ReadableStreamDefaultController<Uint8Array>;
     const stream = new ReadableStream<Uint8Array>({
@@ -396,43 +483,47 @@ async function route(req: Request): Promise<Response> {
     const html = await Deno.readTextFile(
       publicFile(`${url.pathname.slice("/dev/".length)}.html`),
     );
-    return new Response(html, { headers: { "content-type": "text/html" } });
+    return new Response(html, { headers: htmlHeaders() });
   }
 
   if (url.pathname === "/datastar.js") {
     const ds = await Deno.readTextFile(publicFile("datastar.js"));
     return new Response(ds, {
-      headers: { "content-type": "application/javascript" },
+      headers: staticHeaders("application/javascript"),
     });
   }
 
   if (url.pathname === "/style.css") {
     const css = await Deno.readTextFile(publicFile("style.css"));
     return new Response(css, {
-      headers: { "content-type": "text/css; charset=utf-8" },
+      headers: staticHeaders("text/css; charset=utf-8"),
     });
   }
 
   if (
-    url.pathname === "/app.js" || url.pathname === "/paint-engine.js" ||
-    url.pathname === "/palette-engine.js" || url.pathname === "/ulid.js" ||
-    url.pathname === "/sync.js" || url.pathname === "/local-db.js" ||
-    url.pathname === "/cell-codec.js" || url.pathname === "/compose.js" ||
-    url.pathname === "/live-replay.js"
+    url.pathname === "/app.js" || url.pathname === "/sync.js" ||
+    url.pathname === "/local-db.js" || url.pathname === "/live-replay.js"
   ) {
     const source = await Deno.readTextFile(clientFile(url.pathname.slice(1)));
     return new Response(source, {
-      headers: { "content-type": "application/javascript; charset=utf-8" },
+      headers: staticHeaders("application/javascript; charset=utf-8"),
+    });
+  }
+
+  const sharedModule = url.pathname.match(
+    /^\/shared\/(paint-engine|palette-engine|ulid|cell-codec|compose)\.js$/,
+  );
+  if (sharedModule) {
+    const source = await Deno.readTextFile(sharedFile(`${sharedModule[1]}.js`));
+    return new Response(source, {
+      headers: staticHeaders("application/javascript; charset=utf-8"),
     });
   }
 
   if (url.pathname === "/Minecraftia-Regular.ttf") {
     const font = await Deno.readFile(publicFile("Minecraftia-Regular.ttf"));
     return new Response(font, {
-      headers: {
-        "content-type": "font/ttf",
-        "cache-control": "public, max-age=31536000, immutable",
-      },
+      headers: staticHeaders("font/ttf", true),
     });
   }
 
@@ -442,13 +533,19 @@ async function route(req: Request): Promise<Response> {
     });
   }
 
-  const html = await Deno.readTextFile(publicFile("index.html"));
+  if (url.pathname === "/" && req.method === "GET") {
+    const html = await Deno.readTextFile(publicFile("index.html"));
+    const session = await guestSession(req, true);
+    return withSessionCookie(
+      new Response(html, { headers: htmlHeaders() }),
+      session as NonNullable<typeof session>,
+    );
+  }
 
-  return new Response(html, {
-    headers: { "content-type": "text/html" },
-  });
+  return new Response("not found", { status: 404 });
 }
 
 if (import.meta.main) {
-  Deno.serve(handler);
+  assertGuestSessionConfigured();
+  Deno.serve({ automaticCompression: true }, handler);
 }

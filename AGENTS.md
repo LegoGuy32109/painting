@@ -11,7 +11,7 @@ vanilla ES modules, no client framework/bundler).
 ## The one convention that matters most
 
 **Client stays vanilla JavaScript.** `src/client/` is plain ES modules with
-`// @ts-check` and JSDoc typed against `src/client/paint-types.d.ts` — no
+`// @ts-check` and JSDoc typed against `src/shared/paint-types.d.ts` — no
 libraries beyond what's already there, no framework, no bundler. **Real
 TypeScript, and real dependencies, belong on the server** (`src/server/`) and in
 `scripts/`. When in doubt about whether something is "client" or "server," ask

@@ -2,9 +2,9 @@
 
 import { assertEquals } from "@std/assert";
 import fixtures from "./fixtures/live-paintings.json" with { type: "json" };
-import { decodeCells } from "../src/client/cell-codec.js";
+import { decodeCells } from "../src/shared/cell-codec.js";
 import { LiveReplay } from "../src/client/live-replay.js";
-import { composeCanvas } from "../src/client/compose.js";
+import { composeCanvas } from "../src/shared/compose.js";
 
 /** @typedef {{ sequence: number, id: string, kind: string, strokeId: string | null, cells: number[] | null, revertsId: string | null, clientTs: number }} FixtureEvent */
 

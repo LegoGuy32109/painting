@@ -1,7 +1,7 @@
 @font-face {
   font-family: "Minecraftia";
   src: url("/Minecraftia-Regular.ttf") format("truetype");
-  font-display: block;
+  font-display: optional;
 }
 
 :root {
@@ -94,6 +94,16 @@ input:focus-visible {
   padding: env(safe-area-inset-top) max(1rem,
     env(safe-area-inset-right))
     max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+}
+
+.sync-footer {
+  padding: 0.25rem max(1rem, env(safe-area-inset-right))
+    max(0.5rem, env(safe-area-inset-bottom)) max(1rem,
+    env(safe-area-inset-left));
+  color: var(--border);
+  font-family: monospace;
+  font-size: 0.75rem;
+  text-align: center;
 }
 
 .canvas-header {

@@ -31,6 +31,13 @@ arbitrary preview deploy" at the env-var level. If that distinction ever
 matters, it'd need a different mechanism (e.g. reading `DENO_DEPLOY_BRANCH` or
 similar at runtime), not a different context.
 
+`GUEST_SESSION_SECRET` signs the anonymous profile cookie. Set one random value
+of at least 32 bytes across Production, Preview, Local, and Build. Build does
+not currently read it, but keeping all four contexts aligned prevents a future
+build-time task from seeing a different configuration. Keep the value stable
+across deployments. Rotating it signs every guest out and prevents an existing
+browser from writing to its earlier canvases.
+
 ## Viewing current variables
 
 ```bash

@@ -2,7 +2,7 @@
 
 CREATE TABLE IF NOT EXISTS canvases (
   id                      TEXT PRIMARY KEY,
-  owner_id                TEXT,
+  owner_id                TEXT NOT NULL,
   title                   TEXT,
   pixels                  BLOB NOT NULL,
   created_at              INTEGER NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS canvas_events (
   sequence    INTEGER PRIMARY KEY AUTOINCREMENT,
   id          TEXT NOT NULL UNIQUE,
   canvas_id   TEXT NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
-  kind        TEXT NOT NULL CHECK (kind IN ('stroke', 'undo', 'complete')),
+  kind        TEXT NOT NULL CHECK (kind IN ('stroke', 'undo')),
   stroke_id   TEXT,
   cells       BLOB,
   reverts_id  TEXT,

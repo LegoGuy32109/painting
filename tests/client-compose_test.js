@@ -1,12 +1,12 @@
 // @ts-check
 // Client-side mirror of tests/compose_test.ts — same algorithm, same
 // correctness claim (exclude by strokeId, not a sequence-range rollback),
-// now exercised through src/client/compose.js directly.
+// now exercised through src/shared/compose.js directly.
 
 import { assertEquals } from "@std/assert";
-import { composeCanvas } from "../src/client/compose.js";
-import { encodeCells } from "../src/client/cell-codec.js";
-import { createPixels } from "../src/client/paint-engine.js";
+import { composeCanvas } from "../src/shared/compose.js";
+import { encodeCells } from "../src/shared/cell-codec.js";
+import { createPixels } from "../src/shared/paint-engine.js";
 
 /** @param {string} strokeId @param {Array<[number, number]>} cells */
 function strokeEvent(strokeId, cells) {

@@ -4,9 +4,9 @@
 // undone stroke's own diff rows.
 
 import { assertEquals } from "@std/assert";
-import { composeCanvas } from "../src/server/compose.ts";
-import { encodeCells } from "../src/client/cell-codec.js";
-import { createPixels } from "../src/client/paint-engine.js";
+import { composeCanvas } from "../src/shared/compose.js";
+import { encodeCells } from "../src/shared/cell-codec.js";
+import { createPixels } from "../src/shared/paint-engine.js";
 import type { CanvasEventRow } from "../src/server/db.ts";
 
 let seq = 0;

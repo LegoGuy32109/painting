@@ -9,8 +9,8 @@
 import { type Client, createClient } from "@tursodatabase/serverless/compat";
 export type { Client };
 
-/** @typedef {"stroke" | "undo" | "complete"} EventKind */
-export type EventKind = "stroke" | "undo" | "complete";
+/** @typedef {"stroke" | "undo"} EventKind */
+export type EventKind = "stroke" | "undo";
 
 export interface NewEvent {
   id: string;
@@ -35,11 +35,16 @@ export interface CanvasEventRow {
 
 export interface CanvasSummary {
   id: string;
-  ownerId: string | null;
+  ownerId: string;
   title: string | null;
   createdAt: number;
   lastStrokeAt: number | null;
   clientReportedActive: boolean;
+  completedAt: number | null;
+}
+
+export interface CanvasAccess {
+  ownerId: string;
   completedAt: number | null;
 }
 
@@ -77,7 +82,7 @@ export function createDb(): Client {
 export async function createCanvas(
   db: Client,
   id: string,
-  ownerId: string | null,
+  ownerId: string,
   pixels: Uint8Array,
   now: number,
 ): Promise<void> {
@@ -97,7 +102,7 @@ export async function createCanvas(
 export async function ensureCanvas(
   db: Client,
   id: string,
-  ownerId: string | null,
+  ownerId: string,
   blankPixels: Uint8Array,
   now: number,
 ): Promise<void> {
@@ -127,6 +132,44 @@ export async function getCanvasOwnerId(
   return (res.rows[0].owner_id as string | null) ?? null;
 }
 
+export async function getCanvasAccess(
+  db: Client,
+  canvasId: string,
+): Promise<CanvasAccess | null> {
+  const res = await db.execute({
+    sql: "SELECT owner_id, completed_at FROM canvases WHERE id = ?",
+    args: [canvasId],
+  });
+  if (res.rows.length === 0) return null;
+  return {
+    ownerId: String(res.rows[0].owner_id),
+    completedAt: res.rows[0].completed_at === null
+      ? null
+      : Number(res.rows[0].completed_at),
+  };
+}
+
+export async function eventAcknowledgments(
+  db: Client,
+  canvasId: string,
+  eventIds: string[],
+): Promise<Array<{ id: string; sequence: number }>> {
+  if (eventIds.length === 0) return [];
+  const placeholders = eventIds.map(() => "?").join(", ");
+  const res = await db.execute({
+    sql:
+      `SELECT id, sequence FROM canvas_events WHERE canvas_id = ? AND id IN (${placeholders})`,
+    args: [canvasId, ...eventIds],
+  });
+  const byId = new Map(
+    res.rows.map((row) => [String(row.id), Number(row.sequence)]),
+  );
+  return eventIds.flatMap((id) => {
+    const sequence = byId.get(id);
+    return sequence === undefined ? [] : [{ id, sequence }];
+  });
+}
+
 export async function headSequence(
   db: Client,
   canvasId: string,
@@ -144,12 +187,13 @@ export async function completeCanvas(
   canvasId: string,
   title: string,
   now: number,
-): Promise<void> {
-  await db.execute({
+): Promise<boolean> {
+  const result = await db.execute({
     sql:
-      "UPDATE canvases SET title = ?, completed_at = ?, client_reported_active = 0 WHERE id = ?",
+      "UPDATE canvases SET title = ?, completed_at = ?, client_reported_active = 0 WHERE id = ? AND completed_at IS NULL",
     args: [title, now, canvasId],
   });
+  return result.rowsAffected === 1;
 }
 
 /**
@@ -158,7 +202,7 @@ export async function completeCanvas(
  * so this also requires a stroke within the last `staleAfterMs` (default
  * 120s) as the real backstop. The client's own idle timer never pushes a
  * network update on its own while there's nothing new to sync (see
- * IDLE_TIMEOUT_MS in src/client/paint-engine.js) — a painter who's just
+ * IDLE_TIMEOUT_MS in src/shared/paint-engine.js) — a painter who's just
  * thinking between strokes, not gone, relies entirely on this window
  * staying generous enough to outlast normal pauses. A backgrounded painter
  * remains active so the same browser can open /dev/active; pagehide reports
@@ -211,7 +255,7 @@ export async function pullEventsSince(
 function rowToSummary(row: any): CanvasSummary {
   return {
     id: row.id,
-    ownerId: row.owner_id ?? null,
+    ownerId: String(row.owner_id),
     title: row.title ?? null,
     createdAt: Number(row.created_at),
     lastStrokeAt: row.last_stroke_at === null
@@ -376,7 +420,8 @@ export async function appendEvents(
     ...events.map((event) => ({
       sql: "INSERT OR IGNORE INTO canvas_events " +
         "(id, canvas_id, kind, stroke_id, cells, reverts_id, client_ts, received_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "SELECT ?, ?, ?, ?, ?, ?, ?, ? " +
+        "WHERE EXISTS (SELECT 1 FROM canvases WHERE id = ? AND completed_at IS NULL)",
       args: [
         event.id,
         canvasId,
@@ -386,11 +431,12 @@ export async function appendEvents(
         event.revertsId ?? null,
         event.clientTs,
         now,
+        canvasId,
       ],
     })),
     {
       sql:
-        "UPDATE canvases SET last_stroke_at = ?, client_reported_active = ? WHERE id = ?",
+        "UPDATE canvases SET last_stroke_at = ?, client_reported_active = ? WHERE id = ? AND completed_at IS NULL",
       args: [now, heartbeatActive ? 1 : 0, canvasId],
     },
   ];

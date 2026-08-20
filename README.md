@@ -11,8 +11,9 @@ The paint rules and interface reference live in
 
 ```text
 src/
-  client/  Browser modules and declaration-only shared types
+  client/  Browser modules
   server/  Deno HTTP server
+  shared/  Pure domain modules and declaration contracts used by both runtimes
 tests/     Automated tests
 public/    HTML, CSS, fonts, and vendored browser assets
 docs/      Product specifications and project notes
@@ -72,7 +73,9 @@ from that database but preserves its schema. The clear command also requires
 - Keep the no-build workflow: do not add a client framework, bundler, or new
   dependency without an explicit project decision.
 - Use `// @ts-check` in browser JavaScript.
-- Put shared, non-runtime type shapes in `.d.ts` files. Deno and editor tooling
-  use them only. Browsers neither fetch nor execute them.
+- Put DOM-free domain logic in `src/shared/*.js` so the browser and Deno use the
+  same implementation.
+- Put shared, non-runtime type shapes in `src/shared/*.d.ts`. Deno and editor
+  tooling use them only. Browsers neither fetch nor execute them.
 - Keep vendored third-party browser files in `public/` so they stay outside the
   authored-code type-check boundary.

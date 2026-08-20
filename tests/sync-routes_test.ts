@@ -6,8 +6,19 @@
 import { assertEquals } from "@std/assert";
 import { handler } from "../src/server/main.ts";
 import { createDb } from "../src/server/db.ts";
-import { ulid } from "../src/server/ulid.ts";
-import { encodeCells } from "../src/client/cell-codec.js";
+import { ulid } from "../src/shared/ulid.js";
+import { encodeCells } from "../src/shared/cell-codec.js";
+import {
+  type GuestSession,
+  guestSession,
+} from "../src/server/guest-session.ts";
+
+if (!Deno.env.get("GUEST_SESSION_SECRET")) {
+  Deno.env.set(
+    "GUEST_SESSION_SECRET",
+    "test-only-guest-session-secret-32-bytes",
+  );
+}
 
 function cellsBase64(cells: Array<[number, number]>): string {
   const bytes = encodeCells(cells);
@@ -17,46 +28,67 @@ function cellsBase64(cells: Array<[number, number]>): string {
 }
 
 const db = createDb();
+const SESSION_A = (await guestSession(
+  new Request("http://localhost/"),
+  true,
+)) as GuestSession;
+const SESSION_B = (await guestSession(
+  new Request("http://localhost/"),
+  true,
+)) as GuestSession;
+
+function cookie(session: GuestSession): string {
+  return session.setCookie?.split(";", 1)[0] ?? "";
+}
 
 async function dropCanvas(id: string) {
   await db.execute({ sql: "DELETE FROM canvases WHERE id = ?", args: [id] });
 }
 
-function post(path: string, body: unknown, ownerId = "test-owner") {
+function post(path: string, body: unknown, session = SESSION_A) {
   return handler(
     new Request(`http://localhost${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-owner-id": ownerId },
+      headers: { "content-type": "application/json", cookie: cookie(session) },
       body: JSON.stringify(body),
     }),
   );
 }
 
-function get(path: string) {
-  return handler(new Request(`http://localhost${path}`));
+function get(path: string, session = SESSION_A) {
+  return handler(
+    new Request(`http://localhost${path}`, {
+      headers: { cookie: cookie(session) },
+    }),
+  );
 }
 
 Deno.test("push lazily creates the canvas row and appends events", async () => {
   const canvasId = ulid();
   try {
     const strokeId = ulid();
+    const eventId = ulid();
     const res = await post(`/canvases/${canvasId}/events`, {
       events: [{
-        id: strokeId,
+        id: eventId,
         kind: "stroke",
-        cells: null,
+        strokeId,
+        cells: cellsBase64([[0, -1]]),
         revertsId: null,
         clientTs: Date.now(),
       }],
       heartbeatActive: true,
     });
     assertEquals(res.status, 200);
+    const pushed = await res.json();
+    assertEquals(pushed.acknowledgments.length, 1);
+    assertEquals(pushed.acknowledgments[0].id, eventId);
 
     const pullRes = await get(`/canvases/${canvasId}/events?since=0`);
     const pulled = await pullRes.json();
     assertEquals(pulled.headSequence > 0, true);
     assertEquals(pulled.events.length, 1);
-    assertEquals(pulled.events[0].id, strokeId);
+    assertEquals(pulled.events[0].id, eventId);
 
     const activeRes = await get("/dev/api/active");
     const active = await activeRes.json();
@@ -75,7 +107,8 @@ Deno.test("a retried push with the same event id is a no-op (idempotent)", async
     const event = {
       id: ulid(),
       kind: "stroke",
-      cells: null,
+      strokeId: ulid(),
+      cells: cellsBase64([[0, -1]]),
       revertsId: null,
       clientTs: Date.now(),
     };
@@ -99,11 +132,14 @@ Deno.test("a retried push with the same event id is a no-op (idempotent)", async
 Deno.test("a heartbeat-only push (empty events) updates client_reported_active without inserting", async () => {
   const canvasId = ulid();
   try {
+    const strokeId = ulid();
+    const strokeEventId = ulid();
     await post(`/canvases/${canvasId}/events`, {
       events: [{
-        id: ulid(),
+        id: strokeEventId,
         kind: "stroke",
-        cells: null,
+        strokeId,
+        cells: cellsBase64([[0, -1]]),
         revertsId: null,
         clientTs: Date.now(),
       }],
@@ -125,14 +161,16 @@ Deno.test("a heartbeat-only push (empty events) updates client_reported_active w
   }
 });
 
-Deno.test("sign sets title/completedAt, appends a complete event, and drops out of active", async () => {
+Deno.test("sign atomically sets completion and rejects later strokes", async () => {
   const canvasId = ulid();
   try {
+    const strokeId = ulid();
     await post(`/canvases/${canvasId}/events`, {
       events: [{
         id: ulid(),
         kind: "stroke",
-        cells: null,
+        strokeId,
+        cells: cellsBase64([[0, -1]]),
         revertsId: null,
         clientTs: Date.now(),
       }],
@@ -143,12 +181,18 @@ Deno.test("sign sets title/completedAt, appends a complete event, and drops out 
     });
     assertEquals(signRes.status, 200);
 
-    const pullRes = await get(`/canvases/${canvasId}/events?since=0`);
-    const pulled = await pullRes.json();
-    assertEquals(
-      pulled.events.some((e: { kind: string }) => e.kind === "complete"),
-      true,
-    );
+    const afterSign = await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[1, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: false,
+    });
+    assertEquals(afterSign.status, 409);
 
     const completedRes = await get("/dev/api/completed");
     const completed = await completedRes.json();
@@ -173,11 +217,13 @@ Deno.test("an undo event carries revertsId pointing at the reverted stroke's id,
   const canvasId = ulid();
   try {
     const strokeId = ulid();
+    const strokeEventId = ulid();
     await post(`/canvases/${canvasId}/events`, {
       events: [{
-        id: strokeId,
+        id: strokeEventId,
         kind: "stroke",
-        cells: null,
+        strokeId,
+        cells: cellsBase64([[0, -1]]),
         revertsId: null,
         clientTs: Date.now(),
       }],
@@ -187,6 +233,7 @@ Deno.test("an undo event carries revertsId pointing at the reverted stroke's id,
       events: [{
         id: ulid(),
         kind: "undo",
+        strokeId: null,
         cells: null,
         revertsId: strokeId,
         clientTs: Date.now(),
@@ -203,7 +250,7 @@ Deno.test("an undo event carries revertsId pointing at the reverted stroke's id,
     );
 
     const strokeEvent = pulled.events.find((e: { id: string }) =>
-      e.id === strokeId
+      e.id === strokeEventId
     );
     assertEquals(strokeEvent.kind, "stroke");
 
@@ -219,33 +266,37 @@ Deno.test("an undo event carries revertsId pointing at the reverted stroke's id,
 Deno.test("a push from a different owner than the canvas's creator is rejected", async () => {
   const canvasId = ulid();
   try {
+    const firstStrokeId = ulid();
     await post(
       `/canvases/${canvasId}/events`,
       {
         events: [{
           id: ulid(),
           kind: "stroke",
-          cells: null,
+          strokeId: firstStrokeId,
+          cells: cellsBase64([[0, -1]]),
           revertsId: null,
           clientTs: Date.now(),
         }],
         heartbeatActive: true,
       },
-      "owner-a",
+      SESSION_A,
     );
+    const secondStrokeId = ulid();
     const res = await post(
       `/canvases/${canvasId}/events`,
       {
         events: [{
           id: ulid(),
           kind: "stroke",
-          cells: null,
+          strokeId: secondStrokeId,
+          cells: cellsBase64([[1, -1]]),
           revertsId: null,
           clientTs: Date.now(),
         }],
         heartbeatActive: true,
       },
-      "owner-b",
+      SESSION_B,
     );
     assertEquals(res.status, 403);
 
@@ -259,7 +310,7 @@ Deno.test("a push from a different owner than the canvas's creator is rejected",
 
     const signRes = await post(`/canvases/${canvasId}/complete`, {
       title: "Hijack Attempt",
-    }, "owner-b");
+    }, SESSION_B);
     assertEquals(
       signRes.status,
       403,
@@ -281,6 +332,7 @@ Deno.test("stroke cells round-trip through base64 over the wire", async () => {
       events: [{
         id: ulid(),
         kind: "stroke",
+        strokeId: ulid(),
         cells,
         revertsId: null,
         clientTs: Date.now(),
@@ -339,6 +391,11 @@ Deno.test("dev API responses embed composed pixels reflecting cells and a stroke
     const activeRes = await get("/dev/api/active");
     const active = await activeRes.json();
     const mine = active.canvases.find((c: { id: string }) => c.id === canvasId);
+    assertEquals(
+      "ownerId" in mine,
+      false,
+      "public canvas data must omit ownerId",
+    );
     const pixelBytes = Uint8Array.from(
       atob(mine.pixels),
       (c) => c.charCodeAt(0),

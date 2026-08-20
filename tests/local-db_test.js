@@ -143,6 +143,39 @@ Deno.test("markSyncedAndGraduate just deletes (no history) when keepHistory is f
   db.close();
 });
 
+Deno.test("graduation leaves every unacknowledged event pending", async () => {
+  const db = await openLocalDb();
+  const acknowledgedKey = await appendLocalEvent(db, {
+    id: "evt-acked",
+    canvasId: "c-unacked",
+    kind: "stroke",
+    strokeId: "stroke-acked",
+    cells: null,
+    revertsId: null,
+    clientTs: 1,
+  });
+  await appendLocalEvent(db, {
+    id: "evt-still-pending",
+    canvasId: "c-unacked",
+    kind: "stroke",
+    strokeId: "stroke-pending",
+    cells: null,
+    revertsId: null,
+    clientTs: 2,
+  });
+
+  await markSyncedAndGraduate(
+    db,
+    [{ localKey: acknowledgedKey, sequence: 10 }],
+    "c-unacked",
+    true,
+  );
+
+  const pending = await listPendingLocalEvents(db, "c-unacked");
+  assertEquals(pending.map((event) => event.id), ["evt-still-pending"]);
+  db.close();
+});
+
 Deno.test("by_owner_completed lists a gallery newest-completed-first, scoped to the owner", async () => {
   const db = await openLocalDb();
   await upsertCanvasLocal(db, {

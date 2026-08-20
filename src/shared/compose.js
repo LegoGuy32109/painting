@@ -4,8 +4,8 @@ import { createPixels } from "./paint-engine.js";
 import { decodeCells } from "./cell-codec.js";
 
 /**
- * Same algorithm as src/server/compose.ts: exclude every 'stroke' whose
- * strokeId was later undone (order-independent — see compose.ts for why
+ * Exclude every 'stroke' whose
+ * strokeId was later undone (order-independent, unlike range rollback),
  * that matters once other devices' diffs can land in between), then apply
  * the rest in order. `events` must already be in the order they actually
  * happened — sequence order for synced history, then insertion order for

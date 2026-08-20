@@ -1,9 +1,9 @@
 // @ts-check
 
-/** @typedef {import("./paint-types.d.ts").CanvasSnapshotRecord} CanvasSnapshotRecord */
-/** @typedef {import("./paint-types.d.ts").LocalEventRecord} LocalEventRecord */
-/** @typedef {import("./paint-types.d.ts").CanvasLocalRecord} CanvasLocalRecord */
-/** @typedef {import("./paint-types.d.ts").CanvasHistoryRecord} CanvasHistoryRecord */
+/** @typedef {import("../shared/paint-types.d.ts").CanvasSnapshotRecord} CanvasSnapshotRecord */
+/** @typedef {import("../shared/paint-types.d.ts").LocalEventRecord} LocalEventRecord */
+/** @typedef {import("../shared/paint-types.d.ts").CanvasLocalRecord} CanvasLocalRecord */
+/** @typedef {import("../shared/paint-types.d.ts").CanvasHistoryRecord} CanvasHistoryRecord */
 
 const DB_NAME = "painting-local";
 const DB_VERSION = 1;
@@ -103,7 +103,7 @@ export function listPendingLocalEvents(db, canvasId) {
  * server-assigned sequence instead of just deleting it. Pass `history: null`
  * to simply delete synced events for canvases that aren't cached.
  * @param {IDBDatabase} db
- * @param {Array<{ localKey: number, sequence: number | null }>} acked
+ * @param {Array<{ localKey: number, sequence: number }>} acked
  * @param {string} canvasId
  * @param {boolean} keepHistory
  */
@@ -115,7 +115,7 @@ export async function markSyncedAndGraduate(db, acked, canvasId, keepHistory) {
   for (const { localKey, sequence } of acked) {
     const record = await toPromise(localEvents.get(localKey));
     if (!record) continue;
-    if (keepHistory && sequence !== null) {
+    if (keepHistory) {
       history.put({
         canvasId,
         sequence,

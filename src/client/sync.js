@@ -1,9 +1,11 @@
 // @ts-check
 
-/** @typedef {import("./paint-types.d.ts").PaintProgressDetail} PaintProgressDetail */
-/** @typedef {import("./paint-types.d.ts").StrokeCommittedDetail} StrokeCommittedDetail */
-/** @typedef {import("./paint-types.d.ts").UndoCommittedDetail} UndoCommittedDetail */
-/** @typedef {import("./paint-types.d.ts").LocalEventRecord} LocalEventRecord */
+/** @typedef {import("../shared/paint-types.d.ts").PaintProgressDetail} PaintProgressDetail */
+/** @typedef {import("../shared/paint-types.d.ts").StrokeCommittedDetail} StrokeCommittedDetail */
+/** @typedef {import("../shared/paint-types.d.ts").UndoCommittedDetail} UndoCommittedDetail */
+/** @typedef {import("../shared/paint-types.d.ts").LocalEventRecord} LocalEventRecord */
+/** @typedef {import("../shared/paint-types.d.ts").PushEventsResponse} PushEventsResponse */
+/** @typedef {import("../shared/paint-types.d.ts").SyncStatus} SyncStatus */
 
 import {
   appendLocalEvent,
@@ -12,40 +14,54 @@ import {
   markSyncedAndGraduate,
   openLocalDb,
 } from "./local-db.js";
-import { localUlid } from "./ulid.js";
-import { encodeCells } from "./cell-codec.js";
-import { composeCanvas } from "./compose.js";
+import { localUlid } from "../shared/ulid.js";
+import { encodeCells } from "../shared/cell-codec.js";
+import { composeCanvas } from "../shared/compose.js";
 
 const IDLE_TIMEOUT_MS = 30_000;
 const SYNC_INTERVAL_MS = 4_000;
-// This is the actual temporal resolution of replay: each flush becomes its
-// own canvas_events row, stamped with one client_ts covering exactly this
-// window's cells. There's no separate per-cell timestamp — a batch's own
-// client_ts already means "these pixels changed in this window," so
-// finer replay fidelity comes from making the window smaller, not from a
-// new field. Multiple flushed batches still travel together in one network
-// push whenever the outbox is behind (see drainOutbox) — tightening this
-// doesn't add HTTP round trips, just makes each recorded row more precise.
 const PROGRESS_FLUSH_MS = 50;
+const MAX_PUSH_EVENTS = 64;
+const MAX_RETRY_MS = 60_000;
 
-// Opt-in timing trace for tuning replay smoothness against /dev/active — off
-// by default so ordinary painters never see it. Enable from devtools with
-// `localStorage.setItem("paintDebugTiming", "1")`, then reload.
-const DEBUG_TIMING = typeof localStorage !== "undefined" &&
-  localStorage.getItem("paintDebugTiming") === "1";
+let DEBUG_TIMING = false;
+try {
+  DEBUG_TIMING = typeof localStorage !== "undefined" &&
+    localStorage.getItem("paintDebugTiming") === "1";
+} catch {
+  // Storage access can be denied while the painting surface still works.
+}
+
 /** @param {string} label @param {Record<string, unknown>} data */
 function debugTiming(label, data) {
   if (DEBUG_TIMING) console.debug(`[paint:sync] ${label}`, data);
 }
 
-/** @param {string} key @returns {string} */
-function getOrCreatePersistentId(key) {
-  let id = localStorage.getItem(key);
-  if (!id) {
-    id = localUlid();
-    localStorage.setItem(key, id);
+/** @param {string} key @returns {string | null} */
+function storedValue(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
   }
-  return id;
+}
+
+/** @param {string} key @param {string} value */
+function storeValue(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // IndexedDB remains the authoritative local event store.
+  }
+}
+
+/** @param {string} key */
+function removeStoredValue(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // The signed server record remains authoritative.
+  }
 }
 
 /** @param {Uint8Array} bytes @returns {string} */
@@ -56,45 +72,72 @@ function bytesToBase64(bytes) {
 }
 
 /**
- * Sets up the outbox pipeline (paint events -> IndexedDB outbox -> server),
- * the client-liveness heartbeat, and the sign flow, for one canvas element.
+ * Sets up local persistence and server synchronization for one canvas.
  * @param {HTMLElement} canvasElement
+ * @param {(status: SyncStatus) => void} [onStatus]
  */
-export function initSync(canvasElement) {
-  const ownerId = getOrCreatePersistentId("ownerId");
-  let canvasId = localStorage.getItem("currentCanvasId");
+export function initSync(canvasElement, onStatus = () => {}) {
+  let canvasId = storedValue("currentCanvasId");
   if (canvasId) canvasElement.setAttribute("canvas-id", canvasId);
 
-  const dbPromise = openLocalDb();
+  const canvas = /** @type {HTMLElement & {
+     *   setReady?: (ready: boolean) => void,
+     *   loadPixels?: (pixels: Int32Array) => void,
+     *   setReadOnly?: (readOnly: boolean) => void
+     * }} */
+    (canvasElement);
+  canvas.setReady?.(false);
+  onStatus({ kind: "restoring", message: "Opening local painting" });
 
-  // Restore a painting-in-progress on load — the client previously only
-  // remembered the canvas id, not its pixels, so refreshing looked like it
-  // wiped the painting even though the server (and local_events/
-  // canvas_history) had the full history the whole time.
-  if (canvasId) {
-    const id = canvasId;
-    void (async () => {
-      const db = await dbPromise;
-      const [history, pending] = await Promise.all([
-        getFullHistory(db, id),
-        listPendingLocalEvents(db, id),
-      ]);
-      const pixels = composeCanvas([...history, ...pending]);
-      const restorable =
-        /** @type {{ loadPixels?: (p: Int32Array) => void }} */ (canvasElement);
-      restorable.loadPixels?.(pixels);
-    })();
-  }
+  const dbPromise = openLocalDb().catch((error) => {
+    debugTiming("local database unavailable", { error: String(error) });
+    return null;
+  });
+  /** @type {LocalEventRecord[]} */
+  let memoryEvents = [];
+  let memoryKey = -1;
+
+  const ready = (async () => {
+    const db = await dbPromise;
+    let restored = true;
+    try {
+      if (canvasId && db) {
+        const [history, pending] = await Promise.all([
+          getFullHistory(db, canvasId),
+          listPendingLocalEvents(db, canvasId),
+        ]);
+        canvas.loadPixels?.(composeCanvas([...history, ...pending]));
+      }
+    } catch (error) {
+      restored = false;
+      debugTiming("local restore failed", { error: String(error) });
+    }
+    canvas.setReady?.(true);
+    if (db && restored) {
+      onStatus({
+        kind: navigator.onLine ? "local" : "offline",
+        message: navigator.onLine
+          ? "Online; saved on this device"
+          : "Offline; saved locally",
+      });
+      void navigator.storage?.persist?.().catch(() => false);
+    } else {
+      onStatus({
+        kind: "blocked",
+        message: db
+          ? "Could not restore local changes"
+          : "Local storage unavailable; keep this page open",
+      });
+    }
+  })();
 
   /** @type {Map<string, Array<[number, number]>>} */
   const strokeBuffers = new Map();
   /** @type {Map<string, ReturnType<typeof setTimeout>>} */
   const flushTimers = new Map();
   let heartbeatActive = false;
-  let headSequence = 0;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let idleTimer = null;
-  let syncing = false;
   let signed = false;
 
   function markActive() {
@@ -108,8 +151,86 @@ export function initSync(canvasElement) {
   function ensureCanvasId() {
     if (canvasId) return;
     canvasId = localUlid();
-    localStorage.setItem("currentCanvasId", canvasId);
+    storeValue("currentCanvasId", canvasId);
     canvasElement.setAttribute("canvas-id", canvasId);
+  }
+
+  /** @param {Omit<LocalEventRecord, "localKey" | "status">} event */
+  async function appendEvent(event) {
+    const db = await dbPromise;
+    let stored = false;
+    if (db) {
+      try {
+        await appendLocalEvent(db, event);
+        stored = true;
+      } catch (error) {
+        debugTiming("local write failed", { error: String(error) });
+      }
+    }
+    if (!stored) {
+      memoryEvents.push({ ...event, status: "pending", localKey: memoryKey-- });
+    }
+    onStatus(
+      stored
+        ? {
+          kind: navigator.onLine ? "local" : "offline",
+          message: navigator.onLine
+            ? "Online; saved on this device"
+            : "Offline; saved locally",
+        }
+        : {
+          kind: "blocked",
+          message: "Local storage unavailable; keep this page open",
+        },
+    );
+  }
+
+  /** @param {string} id @returns {Promise<LocalEventRecord[]>} */
+  async function pendingEvents(id) {
+    const db = await dbPromise;
+    if (!db) return [...memoryEvents];
+    try {
+      return [...await listPendingLocalEvents(db, id), ...memoryEvents];
+    } catch (error) {
+      debugTiming("local outbox read failed", { error: String(error) });
+      return [...memoryEvents];
+    }
+  }
+
+  /** @param {LocalEventRecord[]} pending @param {PushEventsResponse} response */
+  async function graduate(pending, response) {
+    const sequenceById = new Map(
+      response.acknowledgments.map((ack) => [ack.id, ack.sequence]),
+    );
+    const acknowledged = pending.flatMap((event) => {
+      const sequence = sequenceById.get(event.id);
+      return event.localKey === undefined || sequence === undefined
+        ? []
+        : [{ localKey: event.localKey, sequence }];
+    });
+    if (acknowledged.length === 0 && pending.length > 0) {
+      throw new Error("server did not acknowledge the pushed events");
+    }
+    const db = await dbPromise;
+    if (db) {
+      const durableAcknowledgments = acknowledged.filter((ack) =>
+        ack.localKey >= 0
+      );
+      if (durableAcknowledgments.length > 0) {
+        await markSyncedAndGraduate(
+          db,
+          durableAcknowledgments,
+          canvasId || "",
+          true,
+        );
+      }
+    }
+    const acknowledgedIds = new Set(
+      response.acknowledgments.map((ack) => ack.id),
+    );
+    memoryEvents = memoryEvents.filter((event) =>
+      !acknowledgedIds.has(event.id)
+    );
   }
 
   /** @param {string} strokeId */
@@ -125,9 +246,7 @@ export function initSync(canvasElement) {
 
     const clientTs = Date.now();
     debugTiming("flush", { strokeId, cellCount: cells.length, clientTs });
-
-    const db = await dbPromise;
-    await appendLocalEvent(db, {
+    await appendEvent({
       id: localUlid(),
       canvasId,
       kind: "stroke",
@@ -136,7 +255,7 @@ export function initSync(canvasElement) {
       revertsId: null,
       clientTs,
     });
-    void drainOutbox();
+    void requestDrain();
   }
 
   /** @param {CustomEvent<PaintProgressDetail>} event */
@@ -163,137 +282,163 @@ export function initSync(canvasElement) {
   /** @param {CustomEvent<UndoCommittedDetail>} event */
   async function onUndoCommitted(event) {
     if (!canvasId) return;
-    const { revertsId } = event.detail;
-    const db = await dbPromise;
-    await appendLocalEvent(db, {
+    await appendEvent({
       id: localUlid(),
       canvasId,
       kind: "undo",
       strokeId: null,
       cells: null,
-      revertsId,
+      revertsId: event.detail.revertsId,
       clientTs: Date.now(),
     });
-    void drainOutbox();
+    void requestDrain();
   }
 
-  // A round trip through drainOutbox is two sequential requests (push, then
-  // a self-resync pull) — easily >150ms, longer than the flush cadence that
-  // triggers it. Simply bailing while `syncing` is true (the old behavior)
-  // silently dropped every flush that landed mid-round-trip, with only the
-  // 4s SYNC_INTERVAL_MS fallback left to catch up — which is what produced
-  // multi-second batches arriving as one big jump instead of a smooth
-  // stream. `dirty` makes a flush that arrives mid-drain schedule exactly
-  // one more drain immediately after the current one finishes, instead of
-  // disappearing.
-  let dirty = false;
+  let drainRequested = false;
+  /** @type {Promise<boolean> | null} */
+  let drainPromise = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let retryTimer = null;
+  let retryAttempt = 0;
+  let syncBlocked = false;
 
-  async function drainOutbox() {
-    if (!canvasId || !navigator.onLine) return;
-    if (syncing) {
-      dirty = true;
-      return;
-    }
-    syncing = true;
-    dirty = false;
-    try {
-      const id = canvasId;
-      const db = await dbPromise;
-      const pending = await listPendingLocalEvents(db, id);
-      if (pending.length === 0) return;
+  function scheduleRetry() {
+    if (retryTimer || syncBlocked || signed) return;
+    const cap = Math.min(MAX_RETRY_MS, 1000 * 2 ** retryAttempt++);
+    const delay = Math.round(cap / 2 + Math.random() * cap / 2);
+    onStatus({
+      kind: "retrying",
+      message: `Network unavailable; retrying in ${Math.ceil(delay / 1000)}s`,
+    });
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void requestDrain(true);
+    }, delay);
+  }
 
-      const pushStart = Date.now();
-      const oldestClientTs = Math.min(...pending.map((e) => e.clientTs));
-      debugTiming("push start", {
-        pendingCount: pending.length,
-        oldestBacklogMs: pushStart - oldestClientTs,
-      });
-
-      const pushRes = await fetch(`/canvases/${id}/events`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-owner-id": ownerId },
-        body: JSON.stringify({
-          events: pending.map((e) => ({
-            id: e.id,
-            kind: e.kind,
-            strokeId: e.strokeId,
-            cells: e.cells ? bytesToBase64(e.cells) : null,
-            revertsId: e.revertsId,
-            clientTs: e.clientTs,
-          })),
-          heartbeatActive,
-        }),
-      });
-      debugTiming("push done", {
-        durationMs: Date.now() - pushStart,
-        ok: pushRes.ok,
-      });
-      if (!pushRes.ok) {
-        dirty = true;
-        return;
+  /** @returns {Promise<boolean>} */
+  async function drainLoop() {
+    await ready;
+    while (drainRequested && !signed) {
+      drainRequested = false;
+      if (!canvasId) return true;
+      if (!navigator.onLine) {
+        onStatus({ kind: "offline", message: "Offline; saved locally" });
+        return false;
       }
 
-      // Self-resync (learns each event's server-assigned sequence, for
-      // offline-replay graduation) is fire-and-forget: it must not gate the
-      // next drain, or it reintroduces the same round-trip-blocks-live-feel
-      // problem this rewrite exists to fix.
-      void resyncAndGraduate(id, pending);
-    } catch (err) {
-      debugTiming("push error", { error: String(err) });
-      dirty = true;
-    } finally {
-      syncing = false;
-      if (dirty) void drainOutbox();
+      const pending = (await pendingEvents(canvasId)).slice(0, MAX_PUSH_EVENTS);
+      if (pending.length === 0) {
+        retryAttempt = 0;
+        onStatus({ kind: "synced", message: "Saved" });
+        return true;
+      }
+
+      onStatus({ kind: "syncing", message: "Saving" });
+      try {
+        const pushStart = Date.now();
+        const pushRes = await fetch(`/canvases/${canvasId}/events`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            events: pending.map((event) => ({
+              id: event.id,
+              kind: event.kind,
+              strokeId: event.strokeId,
+              cells: event.cells ? bytesToBase64(event.cells) : null,
+              revertsId: event.revertsId,
+              clientTs: event.clientTs,
+            })),
+            heartbeatActive,
+          }),
+        });
+        debugTiming("push done", {
+          durationMs: Date.now() - pushStart,
+          status: pushRes.status,
+        });
+        if (pushRes.status >= 400 && pushRes.status < 500) {
+          syncBlocked = true;
+          onStatus({
+            kind: "blocked",
+            message: pushRes.status === 409
+              ? "This painting is already signed"
+              : "Saving blocked; reload to restore your guest profile",
+          });
+          return false;
+        }
+        if (!pushRes.ok) throw new Error(`push failed with ${pushRes.status}`);
+        const response =
+          /** @type {PushEventsResponse} */ (await pushRes.json());
+        await graduate(pending, response);
+        retryAttempt = 0;
+        drainRequested = true;
+      } catch (error) {
+        debugTiming("push error", { error: String(error) });
+        drainRequested = true;
+        scheduleRetry();
+        return false;
+      }
     }
+    return true;
   }
 
-  /**
-   * @param {string} id
-   * @param {LocalEventRecord[]} pending
-   */
-  async function resyncAndGraduate(id, pending) {
-    try {
-      const pullRes = await fetch(
-        `/canvases/${id}/events?since=${headSequence}`,
-        { headers: { "x-owner-id": ownerId } },
-      );
-      if (!pullRes.ok) return;
-      /** @type {{ events: Array<{ id: string, sequence: number }>, headSequence: number }} */
-      const pulled = await pullRes.json();
-      headSequence = pulled.headSequence;
-      const sequenceById = new Map(
-        pulled.events.map((e) => [e.id, e.sequence]),
-      );
-      const acked = pending
-        .filter((e) => e.localKey !== undefined)
-        .map((e) => ({
-          localKey: /** @type {number} */ (e.localKey),
-          sequence: sequenceById.get(e.id) ?? null,
-        }));
-      const db = await dbPromise;
-      await markSyncedAndGraduate(db, acked, id, true);
-    } catch {
-      // Graduation failed, but the push already succeeded — these events
-      // stay "pending" locally and get re-pushed next drain, which is a
-      // harmless no-op server-side (INSERT OR IGNORE on the same ids).
+  /** @param {boolean} [force] @returns {Promise<boolean>} */
+  function requestDrain(force = false) {
+    drainRequested = true;
+    if (syncBlocked && !force) return Promise.resolve(false);
+    if (force) syncBlocked = false;
+    if (retryTimer && !force) return Promise.resolve(false);
+    if (force && retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
     }
-  }
-
-  /** @param {string} title */
-  async function sign(title) {
-    if (!canvasId || signed) return;
-    await drainOutbox();
-    const res = await fetch(`/canvases/${canvasId}/complete`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-owner-id": ownerId },
-      body: JSON.stringify({ title }),
+    if (drainPromise) return drainPromise;
+    drainPromise = drainLoop().finally(() => {
+      drainPromise = null;
+      if (drainRequested && !retryTimer && !syncBlocked && !signed) {
+        void requestDrain();
+      }
     });
-    if (!res.ok) return;
+    return drainPromise;
+  }
+
+  /** @param {string} title @returns {Promise<boolean>} */
+  async function sign(title) {
+    if (!canvasId || signed) return false;
+    await ready;
+    await Promise.all([...strokeBuffers.keys()].map(flushStroke));
+    const drained = await requestDrain(true);
+    if (!drained || (await pendingEvents(canvasId)).length > 0) {
+      onStatus({
+        kind: navigator.onLine ? "retrying" : "offline",
+        message: navigator.onLine
+          ? "Finish saving before signing"
+          : "Go online before signing",
+      });
+      return false;
+    }
+
+    try {
+      const res = await fetch(`/canvases/${canvasId}/complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) {
+        onStatus({ kind: "blocked", message: "Could not sign this painting" });
+        return false;
+      }
+    } catch {
+      scheduleRetry();
+      return false;
+    }
+
     signed = true;
     heartbeatActive = false;
-    localStorage.removeItem("currentCanvasId");
-    canvasElement.setAttribute("disabled", "");
-    canvasElement.style.pointerEvents = "none";
+    removeStoredValue("currentCanvasId");
+    canvas.setReadOnly?.(true);
+    onStatus({ kind: "signed", message: "Signed and saved" });
+    return true;
   }
 
   canvasElement.addEventListener(
@@ -309,26 +454,36 @@ export function initSync(canvasElement) {
     /** @type {EventListener} */ (/** @type {unknown} */ (onUndoCommitted)),
   );
 
-  setInterval(drainOutbox, SYNC_INTERVAL_MS);
-  addEventListener("online", drainOutbox);
+  setInterval(() => void requestDrain(), SYNC_INTERVAL_MS);
+  addEventListener("online", () => {
+    onStatus({ kind: "local", message: "Online; saving local changes" });
+    void requestDrain(true);
+  });
+  addEventListener("offline", () => {
+    onStatus({ kind: "offline", message: "Offline; saved locally" });
+  });
+
+  function flushBufferedStrokes() {
+    for (const strokeId of strokeBuffers.keys()) void flushStroke(strokeId);
+  }
 
   function sendInactiveBeacon() {
     heartbeatActive = false;
-    if (!canvasId || !navigator.onLine) return;
+    flushBufferedStrokes();
+    if (!canvasId || !navigator.onLine || signed) return;
     navigator.sendBeacon(
       `/canvases/${canvasId}/events`,
       new Blob(
-        [JSON.stringify({ events: [], heartbeatActive: false, ownerId })],
+        [JSON.stringify({ events: [], heartbeatActive: false })],
         { type: "application/json" },
       ),
     );
   }
-  // Watching /dev/active normally moves the painter into a background tab.
-  // That is still a live session: its next stroke should stream to the
-  // viewer. A real navigation-away/close, unlike blur, ends the session and
-  // reports inactive immediately. Canvases abandoned without pagehide still
-  // fall out of the feed through listActiveCanvases()' stroke-age timeout.
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushBufferedStrokes();
+  });
   addEventListener("pagehide", sendInactiveBeacon);
 
-  return { sign };
+  return { sign, ready };
 }

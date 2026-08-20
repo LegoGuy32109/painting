@@ -12,9 +12,9 @@ import {
   createCanvas,
   createDb,
 } from "../src/server/db.ts";
-import { ulid } from "../src/server/ulid.ts";
-import { createPixels } from "../src/client/paint-engine.js";
-import { encodeCells } from "../src/client/cell-codec.js";
+import { ulid } from "../src/shared/ulid.js";
+import { createPixels } from "../src/shared/paint-engine.js";
+import { encodeCells } from "../src/shared/cell-codec.js";
 
 const db = createDb();
 const url = Deno.env.get("TURSO_DB_URL")!;

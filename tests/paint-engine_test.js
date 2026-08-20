@@ -12,7 +12,7 @@ import {
   hexToArgb,
   OPAQUE_WHITE,
   rasterLine,
-} from "../src/client/paint-engine.js";
+} from "../src/shared/paint-engine.js";
 
 /** @param {string} hex */
 function requiredArgb(hex) {

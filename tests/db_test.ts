@@ -9,7 +9,7 @@ import {
   pullEventsSince,
 } from "../src/server/db.ts";
 import { migrateDatabase } from "../src/server/migrations.ts";
-import { ulid } from "../src/server/ulid.ts";
+import { ulid } from "../src/shared/ulid.js";
 
 const db = createDb();
 await migrateDatabase(db);
@@ -191,7 +191,23 @@ Deno.test("completeCanvas sets title/completedAt and forces active=false, visibl
     true,
     Date.now(),
   );
-  await completeCanvas(db, canvasId, "My Painting", Date.now());
+  assertEquals(
+    await completeCanvas(db, canvasId, "My Painting", Date.now()),
+    true,
+  );
+  assertEquals(
+    await completeCanvas(db, canvasId, "Replacement", Date.now()),
+    false,
+  );
+  await appendEvents(
+    dbUrl,
+    dbToken,
+    canvasId,
+    [{ id: ulid(), kind: "stroke", clientTs: Date.now() }],
+    true,
+    Date.now(),
+  );
+  assertEquals((await pullEventsSince(db, canvasId, 0)).events.length, 1);
 
   const activeIds = (await listActiveCanvases(db)).map((c) => c.id);
   assertEquals(activeIds.includes(canvasId), false);

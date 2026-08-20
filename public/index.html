@@ -174,11 +174,20 @@
         </section>
       </div>
     </main>
+    <footer class="sync-footer">
+      <span id="sync-status" role="status" aria-live="polite">
+        Opening local painting
+      </span>
+    </footer>
     <script type="module">
     import { initSync } from "/sync.js";
 
     const canvas = document.querySelector("paint-canvas");
-    const sync = initSync(canvas);
+    const status = document.getElementById("sync-status");
+    const sync = initSync(canvas, (next) => {
+      status.textContent = next.message;
+      status.dataset.state = next.kind;
+    });
 
     document.getElementById("sign-button").addEventListener("click", () => {
       const title = prompt("Title your painting (16 characters max):");

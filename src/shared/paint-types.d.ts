@@ -96,7 +96,7 @@ export interface PaletteStateChangedDetail {
   selection: PaletteSelection;
 }
 
-export type LocalEventKind = "stroke" | "undo" | "complete";
+export type LocalEventKind = "stroke" | "undo";
 export type LocalEventStatus = "pending" | "synced";
 
 export interface CanvasSnapshotRecord {
@@ -137,4 +137,48 @@ export interface CanvasHistoryRecord {
   revertsId: string | null;
   clientTs: number;
   receivedAt: number;
+}
+
+export interface PushEventPayload {
+  id: string;
+  kind: "stroke" | "undo";
+  strokeId: string | null;
+  cells: string | null;
+  revertsId: string | null;
+  clientTs: number;
+}
+
+export interface PushEventsRequest {
+  events: PushEventPayload[];
+  heartbeatActive: boolean;
+}
+
+export interface EventAcknowledgment {
+  id: string;
+  sequence: number;
+}
+
+export interface PushEventsResponse {
+  ok: true;
+  acknowledgments: EventAcknowledgment[];
+  headSequence: number;
+}
+
+export interface CompleteCanvasRequest {
+  title: string;
+}
+
+export type SyncStatusKind =
+  | "restoring"
+  | "local"
+  | "syncing"
+  | "synced"
+  | "offline"
+  | "retrying"
+  | "blocked"
+  | "signed";
+
+export interface SyncStatus {
+  kind: SyncStatusKind;
+  message: string;
 }

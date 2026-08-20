@@ -85,8 +85,14 @@ try {
       "--allow-env",
       "--allow-read",
       "tests/db_test.ts",
+      "tests/sync-routes_test.ts",
     ],
-    env: { ...Deno.env.toObject(), TURSO_DB_URL: dbUrl, TURSO_DB_TOKEN: token },
+    env: {
+      ...Deno.env.toObject(),
+      TURSO_DB_URL: dbUrl,
+      TURSO_DB_TOKEN: token,
+      GUEST_SESSION_SECRET: "ephemeral-test-guest-session-secret-32-bytes",
+    },
     stdout: "inherit",
     stderr: "inherit",
   });
