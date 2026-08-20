@@ -13,6 +13,9 @@ import {
   paintingContext,
 } from "../shared/pixel-render.js";
 
+const SPAWN_INTERVAL_MS = 6_000;
+const TRAVEL_DURATION_SECONDS = 52;
+
 class PaintingParade extends HTMLElement {
   constructor() {
     super();
@@ -31,6 +34,7 @@ class PaintingParade extends HTMLElement {
     this.drainTimer = 0;
     this.refreshing = false;
     this.hidden = document.visibilityState !== "visible";
+    this.spawnSequence = 0;
     this.onVisibility = this.onVisibility.bind(this);
   }
 
@@ -39,7 +43,7 @@ class PaintingParade extends HTMLElement {
     document.addEventListener("visibilitychange", this.onVisibility);
     void this.refresh();
     this.refreshTimer = setInterval(() => void this.refresh(), 5_000);
-    this.spawnTimer = setInterval(() => void this.spawnNext(), 3_500);
+    this.scheduleNextSpawn();
     this.drainTimer = setInterval(() => this.drain(), 33);
   }
 
@@ -58,8 +62,10 @@ class PaintingParade extends HTMLElement {
 
   get capacity() {
     const narrow = matchMedia("(max-width: 40rem)").matches;
-    if (this.mode === "ambient") return narrow ? 3 : 5;
-    return narrow ? 5 : 9;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return narrow ? 4 : 8;
+    }
+    return 10;
   }
 
   build() {
@@ -67,13 +73,17 @@ class PaintingParade extends HTMLElement {
     style.textContent = `
       :host { display:block; position:absolute; inset:0; overflow:hidden; pointer-events:none; contain:strict; }
       .stage { position:absolute; inset:0; overflow:hidden; }
-      figure { --size:clamp(7rem,18vw,13rem); position:absolute; z-index:1; top:var(--lane); left:100%; width:var(--size); margin:0; padding:.5rem; color:#1d1d21; border:.1875rem solid #5d482c; background:#fff8e5; box-shadow:.35rem .35rem 0 rgb(45 32 18 / 28%); animation:travel var(--duration) linear forwards; will-change:transform; }
+      figure { --size:clamp(7rem,18vw,13rem); position:absolute; z-index:1; left:100%; width:var(--size); margin:0; padding:.5rem; color:#1d1d21; border:.1875rem solid #5d482c; background:#fff8e5; box-shadow:.35rem .35rem 0 rgb(45 32 18 / 28%); animation:travel ${TRAVEL_DURATION_SECONDS}s linear forwards; will-change:transform; }
+      figure[data-row="top"] { top:18%; }
+      figure[data-row="bottom"] { top:66%; }
       canvas { display:block; width:100%; aspect-ratio:1; image-rendering:pixelated; background:#fff9ff; }
       figcaption { display:flex; justify-content:space-between; gap:.5rem; min-height:1.3rem; padding-top:.45rem; overflow:hidden; font:clamp(.55rem,1.4vw,.72rem)/1.2 ui-monospace,monospace; white-space:nowrap; }
       .title { overflow:hidden; text-overflow:ellipsis; }
       .live { color:#b02e26; }
       :host([mode="ambient"]) { opacity:.55; filter:saturate(.85); }
       :host([mode="ambient"]) figure { --size:clamp(6rem,15vw,10rem); }
+      :host([mode="display"]) figure[data-row="top"] { top:34%; }
+      :host([mode="display"]) figure[data-row="bottom"] { top:68%; }
       :host([paused]) figure { animation-play-state:paused; }
       @keyframes travel { from { transform:translate3d(0,0,0); } to { transform:translate3d(calc(-100vw - 170%),0,0); } }
       @media (prefers-reduced-motion:reduce) { figure { left:var(--still-x); animation:none; } }
@@ -119,9 +129,7 @@ class PaintingParade extends HTMLElement {
       for (const addition of additions) {
         this.queuedIds.add(addition.canvas.id);
       }
-      while (
-        this.visible.size < Math.min(2, this.capacity) && this.queue.length
-      ) {
+      if (this.visible.size === 0 && this.queue.length) {
         await this.spawnNext();
       }
     } catch (error) {
@@ -132,10 +140,15 @@ class PaintingParade extends HTMLElement {
   }
 
   async spawnNext() {
-    if (this.hidden || this.visible.size >= this.capacity) return;
+    if (this.hidden) return;
+    if (this.visible.size >= this.capacity) {
+      this.scheduleNextSpawn();
+      return;
+    }
     const candidate = this.queue.shift();
     if (!candidate) {
       void this.refresh();
+      this.scheduleNextSpawn();
       return;
     }
     this.queuedIds.delete(candidate.canvas.id);
@@ -145,18 +158,32 @@ class PaintingParade extends HTMLElement {
         : await this.completedEntry(candidate.canvas);
       this.visible.set(candidate.canvas.id, entry);
       this.stage.append(entry.figure);
+      this.scheduleNextSpawn();
     } catch {
       setTimeout(() => void this.spawnNext(), 250);
     }
   }
 
-  /** @param {PublicCanvas} canvas @param {"active" | "completed"} kind @param {number} durationSeconds @returns {ParadeEntry} */
-  baseEntry(canvas, kind, durationSeconds) {
+  scheduleNextSpawn() {
+    clearTimeout(this.spawnTimer);
+    this.spawnTimer = setTimeout(
+      () => void this.spawnNext(),
+      SPAWN_INTERVAL_MS,
+    );
+  }
+
+  /** @param {PublicCanvas} canvas @param {"active" | "completed"} kind @returns {ParadeEntry} */
+  baseEntry(canvas, kind) {
     const figure = document.createElement("figure");
-    const lane = 5 + Math.random() * (this.mode === "ambient" ? 72 : 76);
-    figure.style.setProperty("--lane", `${lane}%`);
-    figure.style.setProperty("--still-x", `${5 + Math.random() * 70}%`);
-    figure.style.setProperty("--duration", `${durationSeconds}s`);
+    const sequence = this.spawnSequence++;
+    const row = sequence % 2 === 0 ? "top" : "bottom";
+    const narrow = matchMedia("(max-width: 40rem)").matches;
+    const columns = narrow ? 2 : 4;
+    const column = Math.floor(sequence / 2) % columns;
+    const stillX = columns === 2 ? 5 + column * 50 : 4 + column * 24;
+    figure.dataset.row = row;
+    figure.dataset.sequence = String(sequence);
+    figure.style.setProperty("--still-x", `${stillX}%`);
     const canvasElement = document.createElement("canvas");
     const context = paintingContext(canvasElement);
     const pixels = decodePixels(canvas.pixels);
@@ -192,7 +219,7 @@ class PaintingParade extends HTMLElement {
 
   /** @param {PublicCanvas} canvas */
   activeEntry(canvas) {
-    const entry = this.baseEntry(canvas, "active", 44 + Math.random() * 16);
+    const entry = this.baseEntry(canvas, "active");
     entry.replay = new LiveReplay({ lagMs: 500, catchUpThresholdMs: 2_000 });
     this.connect(entry);
     return entry;
@@ -204,11 +231,9 @@ class PaintingParade extends HTMLElement {
     if (!response.ok) throw new Error(`replay failed: ${response.status}`);
     const timeline =
       /** @type {CanvasReplayResponse} */ (await response.json());
-    const minimumSeconds = timeline.durationMs / 1_000 + 12;
     const entry = this.baseEntry(
       { ...canvas, pixels: timeline.initialPixels },
       "completed",
-      Math.max(minimumSeconds, 46 + Math.random() * 18),
     );
     entry.timeline = timeline;
     entry.startedAt = performance.now();
@@ -277,7 +302,6 @@ class PaintingParade extends HTMLElement {
     entry.source?.close();
     entry.figure.remove();
     this.visible.delete(entry.id);
-    void this.spawnNext();
   }
 
   onVisibility() {
@@ -291,6 +315,7 @@ class PaintingParade extends HTMLElement {
       if (entry.kind === "active") this.connect(entry);
     }
     void this.refresh();
+    this.scheduleNextSpawn();
   }
 }
 

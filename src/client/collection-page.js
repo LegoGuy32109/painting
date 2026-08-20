@@ -9,7 +9,7 @@ import {
   listCachedCompleted,
   openLocalDb,
   upsertCanvasLocal,
-} from "./local-db.js";
+} from "./local-db.js?v=3";
 import {
   decodeBase64,
   decodePixels,

@@ -35,7 +35,22 @@ Deno.test("returns the Minecraft font", async () => {
 Deno.test("returns the stylesheet", async () => {
   const res = await handler(new Request("http://localhost/style.css"));
   assertEquals(res.headers.get("content-type"), "text/css; charset=utf-8");
-  assertMatch(res.headers.get("cache-control") ?? "", /max-age=3600/);
+  assertEquals(
+    res.headers.get("cache-control"),
+    "public, max-age=0, must-revalidate",
+  );
+});
+
+Deno.test("revalidates mutable browser modules", async () => {
+  const res = await handler(
+    new Request("http://localhost/local-db.js?v=3"),
+  );
+  assertEquals(res.status, 200);
+  assertEquals(
+    res.headers.get("cache-control"),
+    "public, max-age=0, must-revalidate",
+  );
+  assertMatch(await res.text(), /export function deleteCanvasLocal/);
 });
 
 Deno.test("unknown paths return 404 instead of the application shell", async () => {

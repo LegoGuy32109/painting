@@ -62,8 +62,10 @@ function staticHeaders(contentType: string, immutable = false): HeadersInit {
     "content-type": contentType,
     "cache-control": immutable
       ? "public, max-age=31536000, immutable"
-      : "public, max-age=3600, stale-while-revalidate=86400",
-    "deno-cdn-cache-control": "public, s-maxage=31536000",
+      : "public, max-age=0, must-revalidate",
+    "deno-cdn-cache-control": immutable
+      ? "public, s-maxage=31536000"
+      : "public, s-maxage=60",
   };
 }
 

@@ -1,6 +1,6 @@
 // @ts-check
 
-import { initSync } from "./sync.js";
+import { initSync } from "./sync.js?v=3";
 
 const canvas = document.querySelector("paint-canvas");
 const status = document.getElementById("sync-status");
