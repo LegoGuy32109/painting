@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>dev: active canvases</title>
+    <style>
+      body { font-family: monospace; background: #111; color: #eee; margin: 0; padding: 1rem; }
+      h1 { font-size: 1rem; opacity: .6; }
+      .list { display: flex; flex-direction: column; gap: .5rem; }
+      .card {
+        border: 1px solid #444; border-radius: .25rem; padding: .5rem .75rem;
+        display: flex; align-items: center; gap: 1rem;
+      }
+      canvas { image-rendering: pixelated; width: 96px; height: 96px; border: 1px solid #333; flex: none; }
+      .meta { display: flex; flex-direction: column; gap: .25rem; }
+      .id { opacity: .7; }
+      .age { opacity: .5; }
+    </style>
+  </head>
+  <body>
+    <h1>active canvases — pixels stream live over SSE; only the list of who's active is polled</h1>
+    <div class="list" id="list"></div>
+    <script type="module">
+      import { CANVAS_WIDTH, CANVAS_HEIGHT } from "/paint-engine.js";
+
+      const LIST_POLL_MS = 5000;
+      // Replay is paced to each batch's recorded client_ts, not to when the
+      // SSE message happened to arrive — delivery is bursty (a 200ms
+      // cross-instance poll backstop, coalesced pushes), so painting on
+      // arrival looks like staggered snapshots instead of a smooth stream.
+      // This buffer is how far behind live the replay runs, giving the
+      // scheduler slack to smooth that burstiness back out.
+      const LAG_MS = 500;
+      // If replay ever falls further behind than this (e.g. a backgrounded
+      // tab throttled timers), catch up instead of permanently trailing.
+      const CATCH_UP_THRESHOLD_MS = 2000;
+      // Opt-in timing trace, shared toggle with src/client/sync.js — enable
+      // from devtools with `localStorage.setItem("paintDebugTiming", "1")`,
+      // then reload. Off by default so a normal /dev/active visit stays quiet.
+      const DEBUG_TIMING = localStorage.getItem("paintDebugTiming") === "1";
+      /** @param {string} label @param {Record<string, unknown>} data */
+      function debugTiming(label, data) {
+        if (DEBUG_TIMING) console.debug(`[active] ${label}`, data);
+      }
+
+      const list = document.getElementById("list");
+      /**
+       * @typedef {{ id: string, card: HTMLElement, ctx: CanvasRenderingContext2D, pixels: Int32Array, age: HTMLElement, source: EventSource, lastStrokeAt: number, queue: Array<{ts: number, cells: Array<[number, number]>}>, baseServerTs: number | null, baseLocalTime: number | null }} LiveEntry
+       */
+      /** @type {Map<string, LiveEntry>} */
+      const live = new Map();
+
+      // A single interval drives every canvas's playback, instead of each
+      // canvas running its own requestAnimationFrame loop. rAF is fully
+      // suspended by the browser on a backgrounded tab — a real bug hit in
+      // practice: onmessage kept queueing batches while backgrounded, rAF
+      // never ran to drain them, and the queue grew unbounded (seen as
+      // multi-thousand-batch backlogs and 50s+ transit times in the debug
+      // trace). setInterval still fires (even if clamped to ~1/sec) while
+      // hidden, so the queue can't run away like that again.
+      const DRAIN_TICK_MS = 30;
+
+      /** @param {LiveEntry} entry */
+      function drainDueBatches(entry) {
+        const now = Date.now();
+        let painted = false;
+        while (entry.queue.length > 0) {
+          const batch = entry.queue[0];
+          const targetTime = /** @type {number} */ (entry.baseLocalTime) +
+            (batch.ts - /** @type {number} */ (entry.baseServerTs));
+          if (targetTime > now) break;
+          entry.queue.shift();
+          for (const [index, color] of batch.cells) entry.pixels[index] = color;
+          entry.lastStrokeAt = Date.now();
+          painted = true;
+          debugTiming("batch painted", {
+            id: entry.id,
+            lateByMs: now - targetTime,
+            queueLenAfter: entry.queue.length,
+          });
+        }
+        if (painted) paint(entry.ctx, entry.pixels);
+      }
+
+      setInterval(() => {
+        for (const entry of live.values()) drainDueBatches(entry);
+      }, DRAIN_TICK_MS);
+
+      /** @param {string} base64 @returns {Int32Array} */
+      function decodePixels(base64) {
+        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        return new Int32Array(bytes.buffer);
+      }
+
+      /** @param {CanvasRenderingContext2D} ctx @param {Int32Array} pixels */
+      function paint(ctx, pixels) {
+        const image = ctx.createImageData(CANVAS_WIDTH, CANVAS_HEIGHT);
+        for (let i = 0; i < pixels.length; i++) {
+          const argb = pixels[i];
+          image.data[i * 4] = (argb >>> 16) & 0xff;
+          image.data[i * 4 + 1] = (argb >>> 8) & 0xff;
+          image.data[i * 4 + 2] = argb & 0xff;
+          image.data[i * 4 + 3] = (argb >>> 24) & 0xff;
+        }
+        ctx.putImageData(image, 0, 0);
+      }
+
+      /** @param {{id: string, pixels: string, lastStrokeAt: number}} c */
+      function addCard(c) {
+        const card = document.createElement("div");
+        card.className = "card";
+
+        const canvasEl = document.createElement("canvas");
+        canvasEl.width = CANVAS_WIDTH;
+        canvasEl.height = CANVAS_HEIGHT;
+        const ctx = /** @type {CanvasRenderingContext2D} */ (canvasEl.getContext("2d"));
+        const pixels = decodePixels(c.pixels);
+        paint(ctx, pixels);
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const id = document.createElement("span");
+        id.className = "id";
+        id.textContent = c.id;
+        const age = document.createElement("span");
+        age.className = "age";
+        meta.append(id, age);
+
+        card.append(canvasEl, meta);
+        list.append(card);
+
+        /** @type {LiveEntry} */
+        const entry = {
+          id: c.id,
+          card,
+          ctx,
+          pixels,
+          age,
+          // @ts-ignore -- assigned by connectStream() immediately below
+          source: undefined,
+          lastStrokeAt: c.lastStrokeAt,
+          queue: [],
+          baseServerTs: null,
+          baseLocalTime: null,
+        };
+        connectStream(entry);
+        live.set(c.id, entry);
+      }
+
+      /**
+       * (Re)opens the SSE connection for one canvas. Used both for a card's
+       * first connect and to force a clean resync (see the visibilitychange
+       * handler below) — a fresh connection always gets a full `snapshot`
+       * from the server, which is the simplest way to discard a stale
+       * replay queue rather than grinding through however large it grew.
+       * @param {LiveEntry} entry
+       */
+      function connectStream(entry) {
+        entry.source?.close();
+        entry.queue = [];
+        entry.baseServerTs = null;
+        entry.baseLocalTime = null;
+
+        // Live pixels: the server pushes real diffs (or, only after an undo,
+        // a full resync snapshot) the instant anything changes for this
+        // canvas — no polling for pixels. Each diff batch carries the
+        // client's own recorded timestamp, and drainDueBatches() replays
+        // batches paced to those timestamps (LAG_MS behind live) instead of
+        // painting them the instant the SSE message happens to arrive.
+        const source = new EventSource(`/canvases/${entry.id}/stream`);
+        entry.source = source;
+        source.onmessage = (event) => {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "snapshot") {
+            // Undo requires a full recompose with no correct incremental
+            // delta (see diffChunk() server-side) — jump straight to it and
+            // drop any queued replay, which no longer applies.
+            entry.pixels = decodePixels(msg.pixels);
+            entry.queue = [];
+            entry.baseServerTs = null;
+            entry.baseLocalTime = null;
+            paint(entry.ctx, entry.pixels);
+            entry.lastStrokeAt = Date.now();
+            debugTiming("snapshot", { id: entry.id });
+            return;
+          }
+          if (msg.type !== "diff") return;
+          const now = Date.now();
+          debugTiming("message received", {
+            id: entry.id,
+            batchCount: msg.batches.length,
+            queueLenBefore: entry.queue.length,
+          });
+          for (const batch of msg.batches) {
+            debugTiming("batch received", {
+              id: entry.id,
+              transitMs: now - batch.ts,
+              cellCount: batch.cells.length,
+            });
+            if (entry.baseServerTs === null || entry.baseLocalTime === null) {
+              entry.baseServerTs = batch.ts;
+              entry.baseLocalTime = now + LAG_MS;
+              debugTiming("anchor init", {
+                id: entry.id,
+                baseServerTs: entry.baseServerTs,
+                baseLocalTime: entry.baseLocalTime,
+              });
+            } else {
+              const targetTime = entry.baseLocalTime + (batch.ts - entry.baseServerTs);
+              if (now - targetTime > CATCH_UP_THRESHOLD_MS) {
+                debugTiming("anchor reset (fell behind)", {
+                  id: entry.id,
+                  behindMs: now - targetTime,
+                });
+                entry.baseServerTs = batch.ts;
+                entry.baseLocalTime = now + LAG_MS;
+              }
+            }
+            entry.queue.push(batch);
+          }
+        };
+      }
+
+      function removeCard(id) {
+        const entry = live.get(id);
+        if (!entry) return;
+        entry.source.close();
+        entry.card.remove();
+        live.delete(id);
+      }
+
+      // A tab you weren't watching doesn't need a faithful replay of
+      // everything that happened while it was hidden — reconnecting gets a
+      // fresh snapshot and shows what's true now, the same way a live
+      // stream just shows live instead of queuing up what you missed.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") return;
+        for (const entry of live.values()) {
+          debugTiming("resync on visible", { id: entry.id, queueLenDropped: entry.queue.length });
+          connectStream(entry);
+        }
+      });
+
+      async function refreshList() {
+        const res = await fetch("/dev/api/active");
+        const { canvases } = await res.json();
+        const seen = new Set(canvases.map((c) => c.id));
+
+        for (const id of [...live.keys()]) {
+          if (!seen.has(id)) removeCard(id);
+        }
+        for (const c of canvases) {
+          if (!live.has(c.id)) addCard(c);
+        }
+      }
+
+      function tickAges() {
+        for (const entry of live.values()) {
+          entry.age.textContent = `${Math.round((Date.now() - entry.lastStrokeAt) / 1000)}s since last update`;
+        }
+      }
+
+      refreshList();
+      setInterval(refreshList, LIST_POLL_MS);
+      setInterval(tickAges, 1000);
+    </script>
+  </body>
+</html>

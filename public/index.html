@@ -131,6 +131,11 @@
               data-on:click="$paint.erase = !$paint.erase"
               data-text="'Erase: ' + ($paint.erase ? 'on' : 'off')"
             >Erase: off</button>
+            <button
+              type="button"
+              class="action-wide"
+              id="sign-button"
+            >Sign</button>
             <mc-color
               class="selected-color"
               aria-label="Selected paint color"
@@ -170,5 +175,16 @@
         </section>
       </div>
     </main>
+    <script type="module">
+      import { initSync } from "/sync.js";
+
+      const canvas = document.querySelector("paint-canvas");
+      const sync = initSync(canvas);
+
+      document.getElementById("sign-button").addEventListener("click", () => {
+        const title = prompt("Title your painting (16 characters max):");
+        if (title) sync.sign(title.slice(0, 16));
+      });
+    </script>
   </body>
 </html>

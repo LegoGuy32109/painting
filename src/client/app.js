@@ -6,6 +6,7 @@
 /** @typedef {import("./paint-types.d.ts").PaintProgressDetail} PaintProgressDetail */
 /** @typedef {import("./paint-types.d.ts").StrokeCommittedDetail} StrokeCommittedDetail */
 /** @typedef {import("./paint-types.d.ts").UndoAvailabilityDetail} UndoAvailabilityDetail */
+/** @typedef {import("./paint-types.d.ts").UndoCommittedDetail} UndoCommittedDetail */
 /** @typedef {import("./paint-types.d.ts").ColorPickedDetail} ColorPickedDetail */
 /** @typedef {import("./paint-types.d.ts").Cell} Cell */
 /** @typedef {import("./paint-types.d.ts").PaletteState} PaletteState */
@@ -33,6 +34,7 @@ import {
   EMPTY_WELL_COLOR,
   emptyWell,
 } from "./palette-engine.js";
+import { localUlid } from "./ulid.js";
 
 const BASE_COLORS = Object.freeze([
   "black",
@@ -461,7 +463,7 @@ class PaintCanvas extends HTMLElement {
     super();
     this.root = this.attachShadow({ mode: "open" });
     this.pixels = createPixels();
-    /** @type {Int32Array[]} */
+    /** @type {Array<{ strokeId: string, snapshot: Int32Array }>} */
     this.undoStack = [];
     /** @type {Stroke | null} */
     this.stroke = null;
@@ -747,7 +749,7 @@ class PaintCanvas extends HTMLElement {
 
     this.surface.setPointerCapture(event.pointerId);
     this.stroke = {
-      id: crypto.randomUUID(),
+      id: localUlid(),
       pointerId: event.pointerId,
       seen: new Set(),
       snapshot: copyPixels(this.pixels),
@@ -881,7 +883,7 @@ class PaintCanvas extends HTMLElement {
     this.renderPreview();
 
     if (stroke.changed) {
-      this.undoStack.push(stroke.snapshot);
+      this.undoStack.push({ strokeId: stroke.id, snapshot: stroke.snapshot });
       if (this.undoStack.length > 16) this.undoStack.shift();
       emit(this, "undo-availability-changed", { canUndo: true });
       emit(this, "stroke-committed", {
@@ -894,12 +896,16 @@ class PaintCanvas extends HTMLElement {
   }
 
   undo() {
-    const snapshot = this.undoStack.pop();
-    if (!snapshot) return;
-    this.pixels = snapshot;
+    const entry = this.undoStack.pop();
+    if (!entry) return;
+    this.pixels = entry.snapshot;
     this.renderPixels();
     emit(this, "undo-availability-changed", {
       canUndo: this.undoStack.length > 0,
+    });
+    emit(this, "undo-committed", {
+      canvasId: this.canvasId,
+      revertsId: entry.strokeId,
     });
   }
 
@@ -911,6 +917,19 @@ class PaintCanvas extends HTMLElement {
     this.renderPixels();
     this.renderPreview();
     emit(this, "undo-availability-changed", { canUndo: false });
+  }
+
+  /**
+   * Replaces the pixel buffer wholesale — used to restore a canvas on page
+   * load from its local replay history, so refreshing doesn't lose a
+   * painting-in-progress. Doesn't touch undoStack: undo only ever applies to
+   * strokes committed by this device in the current session, and none have
+   * been yet right after a restore.
+   * @param {Int32Array} pixels
+   */
+  loadPixels(pixels) {
+    this.pixels = pixels;
+    this.renderPixels();
   }
 
   refreshPreview() {

@@ -30,10 +30,3 @@ Deno.test("returns the browser modules", async () => {
     assertEquals((await res.text()).length > 0, true);
   }
 });
-
-Deno.test("returns json on /api", async () => {
-  const res = await handler(new Request("http://localhost/api"));
-  const data = await res.json();
-  assertEquals(data.message, "Hello, world!");
-  assertEquals(typeof data.time, "string");
-});

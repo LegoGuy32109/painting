@@ -63,6 +63,11 @@ export interface UndoAvailabilityDetail {
   canUndo: boolean;
 }
 
+export interface UndoCommittedDetail {
+  canvasId: string;
+  revertsId: string;
+}
+
 export interface ColorPickedDetail {
   color: string;
 }
@@ -89,4 +94,47 @@ export interface PaletteState {
 export interface PaletteStateChangedDetail {
   palette: PaletteState;
   selection: PaletteSelection;
+}
+
+export type LocalEventKind = "stroke" | "undo" | "complete";
+export type LocalEventStatus = "pending" | "synced";
+
+export interface CanvasSnapshotRecord {
+  canvasId: string;
+  pixels: Uint8Array;
+  baseSequence: number;
+  updatedAt: number;
+}
+
+export interface LocalEventRecord {
+  localKey?: number;
+  id: string;
+  canvasId: string;
+  kind: LocalEventKind;
+  strokeId: string | null;
+  cells: Uint8Array | null;
+  revertsId: string | null;
+  clientTs: number;
+  status: LocalEventStatus;
+}
+
+export interface CanvasLocalRecord {
+  id: string;
+  title: string | null;
+  completedAt: number | null;
+  pixels: Uint8Array;
+  ownerId: string | null;
+  createdAt: number;
+}
+
+export interface CanvasHistoryRecord {
+  canvasId: string;
+  sequence: number;
+  id: string;
+  kind: LocalEventKind;
+  strokeId: string | null;
+  cells: Uint8Array | null;
+  revertsId: string | null;
+  clientTs: number;
+  receivedAt: number;
 }
