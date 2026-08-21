@@ -3,7 +3,7 @@
 /** @typedef {import("../shared/paint-types.d.ts").CanvasReplayResponse} CanvasReplayResponse */
 /** @typedef {import("../shared/paint-types.d.ts").DisplayFeedResponse} DisplayFeedResponse */
 /** @typedef {import("../shared/paint-types.d.ts").PublicCanvas} PublicCanvas */
-/** @typedef {{ id: string, kind: "active" | "completed", figure: HTMLElement, context: CanvasRenderingContext2D, pixels: Int32Array, state: HTMLElement, source: EventSource | null, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, startedAt: number }} ParadeEntry */
+/** @typedef {{ id: string, kind: "active" | "completed", figure: HTMLElement, context: CanvasRenderingContext2D, pixels: Int32Array, state: HTMLElement, source: EventSource | null, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number | null, playbackDurationMs: number }} ParadeEntry */
 
 import { LiveReplay } from "./live-replay.js";
 import {
@@ -227,7 +227,9 @@ class PaintingParade extends HTMLElement {
       replay: null,
       timeline: null,
       nextStep: 0,
-      startedAt: performance.now(),
+      animation: null,
+      playbackStartedAt: null,
+      playbackDurationMs: 0,
     });
     figure.addEventListener("animationend", () => this.retire(entry), {
       once: true,
@@ -245,7 +247,7 @@ class PaintingParade extends HTMLElement {
 
   /** @param {PublicCanvas} canvas */
   async completedEntry(canvas) {
-    const response = await fetch(`/canvases/${canvas.id}/replay?v=2`);
+    const response = await fetch(`/canvases/${canvas.id}/replay?v=3`);
     if (!response.ok) throw new Error(`replay failed: ${response.status}`);
     const timeline =
       /** @type {CanvasReplayResponse} */ (await response.json());
@@ -254,12 +256,38 @@ class PaintingParade extends HTMLElement {
       "completed",
     );
     entry.timeline = timeline;
-    entry.startedAt = performance.now();
     this.recentCompleted.push(canvas.id);
     if (this.recentCompleted.length > RECENT_COMPLETED_LIMIT) {
       this.recentCompleted.shift();
     }
     return entry;
+  }
+
+  /** @param {ParadeEntry} entry */
+  startCompletedPlayback(entry) {
+    if (entry.kind !== "completed" || entry.playbackStartedAt !== null) return;
+    const animation = entry.figure.getAnimations()[0] ?? null;
+    entry.animation = animation;
+    if (!animation) {
+      entry.playbackStartedAt = 0;
+      entry.playbackDurationMs = 0;
+      return;
+    }
+    const animationTime = Number(animation.currentTime);
+    const animationDuration = Number(
+      animation.effect?.getComputedTiming().duration,
+    );
+    const stageBounds = this.stage.getBoundingClientRect();
+    const figureBounds = entry.figure.getBoundingClientRect();
+    const travelDistance = stageBounds.width + figureBounds.width * 1.7;
+    const speed = travelDistance / animationDuration;
+    const visibleTravelMs = speed > 0
+      ? Math.max(0, stageBounds.right - figureBounds.left) / speed
+      : 0;
+    entry.playbackStartedAt = Number.isFinite(animationTime)
+      ? animationTime
+      : 0;
+    entry.playbackDurationMs = visibleTravelMs * 2 / 3;
   }
 
   /** @param {ParadeEntry} entry */
@@ -282,7 +310,6 @@ class PaintingParade extends HTMLElement {
 
   drain() {
     if (this.hidden) return;
-    const now = performance.now();
     for (const entry of this.visible.values()) {
       if (entry.kind === "active") {
         let changed = false;
@@ -294,7 +321,24 @@ class PaintingParade extends HTMLElement {
         continue;
       }
       if (!entry.timeline) continue;
-      const elapsed = now - entry.startedAt;
+      if (entry.playbackStartedAt === null) {
+        const stageBounds = this.stage.getBoundingClientRect();
+        const figureBounds = entry.figure.getBoundingClientRect();
+        const fullyInside = figureBounds.left >= stageBounds.left - 1 &&
+          figureBounds.right <= stageBounds.right + 1;
+        if (
+          fullyInside ||
+          matchMedia("(prefers-reduced-motion: reduce)").matches
+        ) {
+          this.startCompletedPlayback(entry);
+        }
+      }
+      if (entry.playbackStartedAt === null) continue;
+      const animationTime = Number(entry.animation?.currentTime);
+      const elapsed = entry.playbackDurationMs <= 0
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, animationTime - entry.playbackStartedAt) *
+          entry.timeline.durationMs / entry.playbackDurationMs;
       let changed = false;
       while (
         entry.nextStep < entry.timeline.steps.length &&

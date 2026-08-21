@@ -5,9 +5,8 @@ import type {
   ReplayStep,
 } from "../shared/paint-types.d.ts";
 
-export const REPLAY_EVENT_LIMIT = 140;
+export const REPLAY_EVENT_LIMIT = 4_000;
 export const MAX_REPLAY_GAP_MS = 500;
-export const MAX_REPLAY_DURATION_MS = 44_000;
 export const MAX_CANVAS_EVENTS = 20_000;
 
 function base64(bytes: Uint8Array): string {
@@ -25,8 +24,8 @@ function pixelsBase64(events: CanvasEventRow[]): string {
  * Produces a bounded event-count replay. Stroke rows remain compact diffs;
  * undo rows become snapshots because they can remove a stroke from before the
  * replay. Sequence order is authoritative. Client timestamp gaps are clamped
- * so pauses cannot stall playback, then proportionally compressed if needed
- * so the signed frame is visible before its display card leaves.
+ * so pauses cannot stall playback; the browser scales this relative timeline
+ * to the card's remaining visible travel time.
  */
 export function buildCanvasReplay(
   id: string,
@@ -64,14 +63,11 @@ export function buildCanvasReplay(
     times.push(elapsed);
     previous = current;
   });
-  const scale = elapsed > MAX_REPLAY_DURATION_MS
-    ? MAX_REPLAY_DURATION_MS / elapsed
-    : 1;
   /** @type {ReplayStep[]} */
   const steps: ReplayStep[] = [];
   for (let index = split; index < events.length; index++) {
     const event = events[index];
-    const atMs = Math.round(times[index - split] * scale);
+    const atMs = times[index - split];
     if (event.kind === "stroke" && event.cells) {
       steps.push({ type: "diff", atMs, cells: base64(event.cells) });
     } else if (event.kind === "undo") {
@@ -88,7 +84,7 @@ export function buildCanvasReplay(
     title,
     initialPixels: pixelsBase64(prefix),
     finalPixels: pixelsBase64(events),
-    durationMs: Math.round(elapsed * scale),
+    durationMs: elapsed,
     steps,
   };
 }

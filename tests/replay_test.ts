@@ -25,7 +25,7 @@ function event(
 
 Deno.test("completed replay keeps only the final event count", () => {
   const events = Array.from(
-    { length: 141 },
+    { length: 4_001 },
     (_, index) =>
       event(index + 1, "stroke", index, {
         strokeId: `stroke-${index}`,
@@ -33,9 +33,9 @@ Deno.test("completed replay keeps only the final event count", () => {
       }),
   );
   const replay = buildCanvasReplay("canvas", "Clouds", events);
-  assertEquals(replay.steps.length, 140);
+  assertEquals(replay.steps.length, 4_000);
   assertEquals(replay.steps[0].atMs, 0);
-  assertEquals(replay.durationMs, 139);
+  assertEquals(replay.durationMs, 3_999);
 });
 
 Deno.test("replay gaps are capped at half a second", () => {
@@ -53,7 +53,7 @@ Deno.test("replay gaps are capped at half a second", () => {
   assertEquals(replay.steps.map((step) => step.atMs), [0, 500]);
 });
 
-Deno.test("long replays finish before their display card leaves", () => {
+Deno.test("long replays preserve their capped relative timeline", () => {
   const replay = buildCanvasReplay(
     "canvas",
     "Long pause",
@@ -66,7 +66,7 @@ Deno.test("long replays finish before their display card leaves", () => {
         }),
     ),
   );
-  assertEquals(replay.durationMs, 44_000);
+  assertEquals(replay.durationMs, 69_500);
   const gaps = replay.steps.slice(1).map((step, index) =>
     step.atMs - replay.steps[index].atMs
   );
