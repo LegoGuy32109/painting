@@ -1,4 +1,9 @@
-# Next phase: interactive palette and drag feedback
+# Archived phase: interactive palette and drag feedback
+
+This prototype phase is complete. The application now also includes durable
+guest drafts, offline synchronization, public live/replay presentation, signed
+collections, and owner-scoped deletion. Keep this document as the original
+interaction contract rather than a description of unfinished work.
 
 Build this after the first interactive canvas slice (opaque 16×16 painting,
 brushes, erase, undo, reset, and the basic selection bridge) is verified.
@@ -9,9 +14,8 @@ Make the palette a complete, direct-manipulation color-mixing interface for
 vertical phones first. A player can select colors, drag a color or water to a
 custom well, and get clear motion and target feedback throughout the gesture.
 
-The phase finishes when mouse, touch, and pen users can operate the
-interaction. The phase does not add persistence, accounts, or new client
-dependencies.
+The phase finishes when mouse, touch, and pen users can operate the interaction.
+The phase does not add persistence, accounts, or new client dependencies.
 
 ## Requirements
 
@@ -50,8 +54,8 @@ dependencies.
 - At the smallest supported phone width, use six wells per row. The 12 custom
   wells then occupy exactly two rows. Use eight base wells per row when the
   available width permits, otherwise use six.
-- Do not add a separate custom-well drawer or horizontal scrolling. Every
-  custom well is visible in the vertical phone palette.
+- Do not add a separate custom-well drawer or horizontal scrolling. Every custom
+  well is visible in the vertical phone palette.
 - All 16 base wells are initially available in this prototype. Picker is
   therefore enabled. Add dye stays visibly disabled.
 - An available base well or non-empty custom well selects on click/tap. The
@@ -67,8 +71,8 @@ dependencies.
 - Valid color sources are available base wells, non-empty custom wells, and the
   large selected-color well. Water is a drag-only source.
 - A valid custom-well target accepts one source color as one mixing input.
-  Follow the integer mixing rules in the [interface
-  specification](joy-of-painting-interface-spec.md).
+  Follow the integer mixing rules in the
+  [interface specification](joy-of-painting-interface-spec.md).
 - Dropping a custom well on itself is a no-op.
 - Dropping Water on a custom well resets all five of its accumulators to zero.
 - Releasing outside a valid target changes neither palette state nor selection.
@@ -85,9 +89,9 @@ dependencies.
 - Mark valid custom targets while a compatible source is dragged. The current
   target gets the `drop-target` treatment. Invalid targets receive no success
   styling.
-- Animate target entry and exit without changing layout. A successful color
-  drop briefly confirms the resulting well color. Water briefly confirms the
-  cleared state.
+- Animate target entry and exit without changing layout. A successful color drop
+  briefly confirms the resulting well color. Water briefly confirms the cleared
+  state.
 - A rejected, self, or off-target drop returns the ghost to its source before
   removal. Do not mutate state until a valid drop is released.
 - Never animate the canvas or interfere with a paint stroke. Palette dragging
@@ -108,8 +112,8 @@ dependencies.
 - Keep canvas pixels and stroke history private to `<paint-canvas>`.
 - Keep browser code as direct ES modules with no additional dependencies or
   build step.
-- Use `// @ts-check` and extend `paint-types.d.ts` for new event and palette
-  shapes.
+- Use `// @ts-check` and extend `src/shared/paint-types.d.ts` for new event and
+  palette shapes.
 - Keep each interaction's state local to `<paint-palette>` until it emits a
   completed state change. It may render optimistically before the DataStar
   attribute update confirms the state.

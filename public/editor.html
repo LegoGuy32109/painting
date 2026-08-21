@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f0e0ae">
+    <title>Paint · Joy of Painting</title>
+    <link rel="stylesheet" href="/base.css">
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/site-nav.js?v=3"></script>
+    <script type="module" src="/datastar.js"></script>
+    <script type="module" src="/app.js?v=4"></script>
+  </head>
+  <body>
+    <site-nav></site-nav>
+    <main
+      class="app"
+      data-signals='{
+        "paint": {
+          "tool": "paint",
+          "selection": { "source": null, "index": null, "color": null },
+          "brushSize": 1,
+          "opacity": 100,
+          "erase": false,
+          "canUndo": false,
+          "undoRequest": 0,
+          "newCanvasRequest": 0
+        },
+        "palette": {
+          "baseAvailable": [true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true],
+          "customWells": [
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 },
+            { "totalRed": 0, "totalGreen": 0, "totalBlue": 0, "totalMaximum": 0, "numberOfColors": 0 }
+          ]
+        }
+      }'
+    >
+      <div class="painting-workspace">
+        <section class="painting-stage" aria-label="Painting area">
+          <div class="canvas-zone">
+            <header class="canvas-header">
+              <h1 class="title">Joy of Painting</h1>
+              <span class="app-domain">paint.joshhale.me</span>
+            </header>
+            <paint-canvas
+              canvas-id=""
+              data-attr:paint-color="$paint.selection.color || ''"
+              data-attr:brush-size="$paint.brushSize"
+              data-attr:erase="$paint.erase"
+              data-attr:opacity="$paint.opacity"
+              data-attr:tool="$paint.tool"
+              data-attr:undo-request="$paint.undoRequest"
+              data-attr:new-canvas-request="$paint.newCanvasRequest"
+              data-on:undo-availability-changed="$paint.canUndo = evt.detail.canUndo"
+              data-on:color-picked="$paint.selection = { source: 'picked', index: null, color: evt.detail.color }; $paint.tool = 'paint'"
+            ></paint-canvas>
+          </div>
+        </section>
+
+        <section class="interface" aria-label="Painting controls">
+          <div class="tool-row tool-row--paint-settings"
+            aria-label="Brush and opacity controls">
+            <button
+              type="button"
+              aria-label="Brush size 1"
+              data-attr:aria-pressed="$paint.brushSize === 1 ? 'true' : 'false'"
+              data-on:click="$paint.brushSize = 1"
+            >B1</button>
+            <button
+              type="button"
+              aria-label="Brush size 2"
+              data-attr:aria-pressed="$paint.brushSize === 2 ? 'true' : 'false'"
+              data-on:click="$paint.brushSize = 2"
+            >B2</button>
+            <button
+              type="button"
+              aria-label="Brush size 3"
+              data-attr:aria-pressed="$paint.brushSize === 3 ? 'true' : 'false'"
+              data-on:click="$paint.brushSize = 3"
+            >B3</button>
+            <button
+              type="button"
+              aria-label="Brush size 4"
+              data-attr:aria-pressed="$paint.brushSize === 4 ? 'true' : 'false'"
+              data-on:click="$paint.brushSize = 4"
+            >B4</button>
+            <button
+              type="button"
+              aria-label="25 percent opacity"
+              data-attr:aria-pressed="$paint.opacity === 25 ? 'true' : 'false'"
+              data-on:click="$paint.opacity = 25"
+            >25%</button>
+            <button
+              type="button"
+              aria-label="50 percent opacity"
+              data-attr:aria-pressed="$paint.opacity === 50 ? 'true' : 'false'"
+              data-on:click="$paint.opacity = 50"
+            >50%</button>
+            <button
+              type="button"
+              aria-label="75 percent opacity"
+              data-attr:aria-pressed="$paint.opacity === 75 ? 'true' : 'false'"
+              data-on:click="$paint.opacity = 75"
+            >75%</button>
+            <button
+              type="button"
+              aria-label="100 percent opacity"
+              data-attr:aria-pressed="$paint.opacity === 100 ? 'true' : 'false'"
+              data-on:click="$paint.opacity = 100"
+            >100</button>
+          </div>
+
+          <div class="tool-row tool-row--history" aria-label="Canvas controls">
+            <button
+              type="button"
+              class="action-wide"
+              disabled
+              data-attr:disabled="$paint.canUndo ? null : true"
+              data-on:click="$paint.undoRequest++"
+            >Undo</button>
+            <button
+              type="button"
+              class="action-wide"
+              data-on:click="$paint.erase = !$paint.erase"
+              data-text="'Erase: ' + ($paint.erase ? 'on' : 'off')"
+            >Erase: off</button>
+            <button
+              type="button"
+              class="action-wide"
+              id="sign-button"
+            >Sign</button>
+            <mc-color
+              class="selected-color"
+              aria-label="Selected paint color"
+              data-palette-source="selected"
+              data-attr:color="$paint.selection.color || ''"
+            ></mc-color>
+            <button
+              type="button"
+              class="action-tile"
+              aria-label="Pick a color from the canvas"
+              data-attr:aria-pressed="$paint.tool === 'picker' ? 'true' : 'false'"
+              data-on:click="$paint.tool = 'picker'"
+            >Pick</button>
+            <button
+              type="button"
+              class="action-tile"
+              aria-label="Water: drag onto a custom color"
+              data-palette-source="water"
+            >H2O</button>
+            <button
+              type="button"
+              class="action-tile"
+              aria-label="Add dye: coming soon"
+              disabled
+            >+</button>
+          </div>
+
+          <paint-palette
+            data-attr:palette-state="JSON.stringify($palette)"
+            data-attr:selected-source="$paint.selection.source || ''"
+            data-attr:selected-index="$paint.selection.index === null ? '' : $paint.selection.index"
+            data-attr:selected-color="$paint.selection.color || ''"
+            data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
+            data-on:palette-state-changed="$palette = evt.detail.palette; $paint.selection = evt.detail.selection"
+          ></paint-palette>
+        </section>
+      </div>
+    </main>
+    <footer class="sync-footer">
+      <span id="sync-status" role="status" aria-live="polite">
+        Opening local painting
+      </span>
+    </footer>
+    <dialog class="pixel-dialog" id="sign-dialog" aria-labelledby="sign-title">
+      <form class="dialog-form" method="dialog" id="sign-form">
+        <p class="eyebrow">Finish painting</p>
+        <h2 id="sign-title">Sign your canvas</h2>
+        <p>Signing makes this painting public and permanent.</p>
+        <label>
+          Painting title
+          <input id="painting-title" name="title" maxlength="16" autocomplete="off" required>
+        </label>
+        <div><span id="title-count">0</span>/16 characters</div>
+        <p class="dialog-status" id="sign-status" role="status"
+          aria-live="polite"></p>
+        <div class="dialog-actions">
+          <button type="button" id="cancel-sign">Keep painting</button>
+          <button type="submit" id="confirm-sign">Sign canvas</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog class="pixel-dialog" id="draft-dialog"
+      aria-labelledby="draft-title">
+      <div class="dialog-form">
+        <p class="eyebrow">Draft recovery</p>
+        <h2 id="draft-title">Two drafts need your choice</h2>
+        <p>A saved online draft and unsaved work on this device both exist. Nothing will be discarded until you choose.</p>
+        <p class="dialog-status" id="draft-status" role="status"
+          aria-live="polite"></p>
+        <div class="dialog-actions">
+          <button type="button"
+            id="restore-server-draft">Use saved draft</button>
+          <button type="button"
+            id="restore-local-draft">Keep this device</button>
+        </div>
+      </div>
+    </dialog>
+    <script type="module" src="/editor-page.js?v=3"></script>
+  </body>
+</html>

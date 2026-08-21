@@ -1,0 +1,127 @@
+.landing-page,
+.display-page {
+  position: relative;
+  overflow: hidden;
+}
+
+.landing-page {
+  min-height: 100dvh;
+}
+
+.landing-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 20% 15%, rgb(255 255 255 / 50%), transparent
+    28rem),
+    linear-gradient(150deg, #f7e9bd, #dbc38d);
+}
+
+.landing-main {
+  display: grid;
+  align-content: center;
+  min-height: calc(100dvh - 5rem);
+  padding-block: 2rem max(2rem, env(safe-area-inset-bottom));
+}
+
+.hero {
+  position: relative;
+  z-index: 3;
+  width: min(100%, 42rem);
+  padding: clamp(1.25rem, 5vw, 3rem);
+}
+
+.hero-copy {
+  max-width: 38rem;
+  margin: 1.25rem 0 0;
+  font-family: ui-monospace, monospace;
+  font-size: clamp(0.95rem, 2.8vw, 1.15rem);
+  line-height: 1.65;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.hero-actions a {
+  display: inline-grid;
+  place-items: center;
+  text-decoration: none;
+}
+
+.primary-action {
+  color: white;
+  background: var(--mc-blue);
+}
+
+.landing-note {
+  position: relative;
+  z-index: 3;
+  width: fit-content;
+  margin: 1rem 0 0;
+  padding: 0.4rem 0.55rem;
+  background: rgb(240 224 174 / 88%);
+  font: 0.75rem/1.4 ui-monospace, monospace;
+}
+
+.display-page {
+  color: #fff8e5;
+  background: #17130d;
+}
+
+.display-page site-nav {
+  color: #fff8e5;
+}
+
+.display-main {
+  position: relative;
+  min-height: calc(100dvh - 4rem);
+}
+
+.display-heading {
+  position: relative;
+  z-index: 4;
+  padding-top: 1rem;
+  pointer-events: none;
+}
+
+.display-heading h1,
+.display-heading p {
+  max-width: 44rem;
+  margin-top: 0;
+}
+
+.display-heading h1 {
+  margin-bottom: 0.5rem;
+  font-size: clamp(1.5rem, 4vw, 2.5rem);
+}
+
+.display-heading p:last-child {
+  color: #d5c8a8;
+  font: 0.8rem/1.5 ui-monospace, monospace;
+}
+
+.display-main painting-parade {
+  position: fixed;
+  inset: 4rem 0 0;
+}
+
+@media (max-width: 34rem) {
+  .landing-main {
+    align-content: end;
+    min-height: calc(100dvh - 7rem);
+  }
+
+  .hero-actions {
+    display: grid;
+  }
+
+  .display-main painting-parade {
+    inset: 7rem 0 0;
+  }
+}

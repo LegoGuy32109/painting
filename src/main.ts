@@ -1,3 +1,5 @@
 import { handler } from "./server/main.ts";
+import { assertGuestSessionConfigured } from "./server/guest-session.ts";
 
-Deno.serve(handler);
+assertGuestSessionConfigured();
+Deno.serve({ automaticCompression: true }, handler);

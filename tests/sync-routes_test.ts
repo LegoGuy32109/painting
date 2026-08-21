@@ -1,0 +1,591 @@
+// Smoke tests for the sync-handshake HTTP routes, against a live database
+// (TURSO_DB_URL/TURSO_DB_TOKEN — painting-local by default). Isolated from
+// tests/main_test.ts (which requires no net/env perms) the same way
+// tests/db_test.ts is isolated from the plain unit-test task.
+
+import { assertEquals } from "@std/assert";
+import { handler } from "../src/server/main.ts";
+import { createDb } from "../src/server/db.ts";
+import { ulid } from "../src/shared/ulid.js";
+import { encodeCells } from "../src/shared/cell-codec.js";
+import {
+  type GuestSession,
+  guestSession,
+} from "../src/server/guest-session.ts";
+
+if (!Deno.env.get("GUEST_SESSION_SECRET")) {
+  Deno.env.set(
+    "GUEST_SESSION_SECRET",
+    "test-only-guest-session-secret-32-bytes",
+  );
+}
+
+function cellsBase64(cells: Array<[number, number]>): string {
+  const bytes = encodeCells(cells);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+const db = createDb();
+const SESSION_A = (await guestSession(
+  new Request("http://localhost/"),
+  true,
+)) as GuestSession;
+const SESSION_B = (await guestSession(
+  new Request("http://localhost/"),
+  true,
+)) as GuestSession;
+
+function cookie(session: GuestSession): string {
+  return session.setCookie?.split(";", 1)[0] ?? "";
+}
+
+async function dropCanvas(id: string) {
+  await db.execute({ sql: "DELETE FROM canvases WHERE id = ?", args: [id] });
+}
+
+function post(path: string, body: unknown, session = SESSION_A) {
+  return handler(
+    new Request(`http://localhost${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookie(session) },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+function put(path: string, body: unknown, session = SESSION_A) {
+  return handler(
+    new Request(`http://localhost${path}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: cookie(session) },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+function remove(path: string, session = SESSION_A) {
+  return handler(
+    new Request(`http://localhost${path}`, {
+      method: "DELETE",
+      headers: { cookie: cookie(session) },
+    }),
+  );
+}
+
+function get(path: string, session = SESSION_A) {
+  return handler(
+    new Request(`http://localhost${path}`, {
+      headers: { cookie: cookie(session) },
+    }),
+  );
+}
+
+Deno.test("guest draft and completed collection lifecycle is owner scoped", async () => {
+  const preferredId = ulid();
+  const ignoredSecondId = ulid();
+  try {
+    const created = await put("/api/me/draft", { id: preferredId });
+    assertEquals(created.status, 200);
+    const first = await created.json();
+    assertEquals(first.draft.id, preferredId);
+    assertEquals(first.acceptedPreferredId, true);
+
+    const repeated = await put("/api/me/draft", { id: ignoredSecondId });
+    const second = await repeated.json();
+    assertEquals(second.draft.id, preferredId);
+    assertEquals(second.acceptedPreferredId, false);
+
+    await post(`/canvases/${preferredId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[0, -65536]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+    const signed = await post(`/canvases/${preferredId}/complete`, {
+      title: "My Painting",
+    });
+    assertEquals(signed.status, 200);
+
+    const mine = await (await get("/api/me/canvases")).json();
+    assertEquals(mine.draft, null);
+    assertEquals(mine.completed[0].id, preferredId);
+    const someoneElse = await (await get("/api/me/canvases", SESSION_B)).json();
+    assertEquals(someoneElse.completed.length, 0);
+
+    const feed = await (await get("/api/display-feed?limit=12")).json();
+    assertEquals(
+      feed.completed.some((canvas: { id: string }) =>
+        canvas.id === preferredId
+      ),
+      true,
+    );
+    const replayResponse = await get(`/canvases/${preferredId}/replay`);
+    assertEquals(replayResponse.status, 200);
+    const replay = await replayResponse.json();
+    assertEquals(replay.id, preferredId);
+    assertEquals(replay.title, "My Painting");
+    assertEquals(replay.steps.length > 0, true);
+
+    assertEquals(
+      (await remove(`/api/me/canvases/${preferredId}`, SESSION_B)).status,
+      404,
+    );
+    assertEquals(
+      (await remove(`/api/me/canvases/${preferredId}`)).status,
+      204,
+    );
+  } finally {
+    await dropCanvas(preferredId);
+    await dropCanvas(ignoredSecondId);
+  }
+});
+
+Deno.test("push lazily creates the canvas row and appends events", async () => {
+  const canvasId = ulid();
+  try {
+    const strokeId = ulid();
+    const eventId = ulid();
+    const res = await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: eventId,
+        kind: "stroke",
+        strokeId,
+        cells: cellsBase64([[0, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+    assertEquals(res.status, 200);
+    const pushed = await res.json();
+    assertEquals(pushed.acknowledgments.length, 1);
+    assertEquals(pushed.acknowledgments[0].id, eventId);
+
+    const pullRes = await get(`/canvases/${canvasId}/events?since=0`);
+    const pulled = await pullRes.json();
+    assertEquals(pulled.headSequence > 0, true);
+    assertEquals(pulled.events.length, 1);
+    assertEquals(pulled.events[0].id, eventId);
+
+    const activeRes = await get("/dev/api/active");
+    const active = await activeRes.json();
+    assertEquals(
+      active.canvases.some((c: { id: string }) => c.id === canvasId),
+      true,
+    );
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("a retried push with the same event id is a no-op (idempotent)", async () => {
+  const canvasId = ulid();
+  try {
+    const event = {
+      id: ulid(),
+      kind: "stroke",
+      strokeId: ulid(),
+      cells: cellsBase64([[0, -1]]),
+      revertsId: null,
+      clientTs: Date.now(),
+    };
+    await post(`/canvases/${canvasId}/events`, {
+      events: [event],
+      heartbeatActive: true,
+    });
+    await post(`/canvases/${canvasId}/events`, {
+      events: [event],
+      heartbeatActive: true,
+    });
+
+    const pullRes = await get(`/canvases/${canvasId}/events?since=0`);
+    const pulled = await pullRes.json();
+    assertEquals(pulled.events.length, 1);
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("a heartbeat-only push (empty events) updates client_reported_active without inserting", async () => {
+  const canvasId = ulid();
+  try {
+    const strokeId = ulid();
+    const strokeEventId = ulid();
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: strokeEventId,
+        kind: "stroke",
+        strokeId,
+        cells: cellsBase64([[0, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+    await post(`/canvases/${canvasId}/events`, {
+      events: [],
+      heartbeatActive: false,
+    });
+
+    const activeRes = await get("/dev/api/active");
+    const active = await activeRes.json();
+    assertEquals(
+      active.canvases.some((c: { id: string }) => c.id === canvasId),
+      false,
+    );
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("sign atomically sets completion and rejects later strokes", async () => {
+  const canvasId = ulid();
+  try {
+    const strokeId = ulid();
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId,
+        cells: cellsBase64([[0, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+    const signRes = await post(`/canvases/${canvasId}/complete`, {
+      title: "Route Smoke Test",
+    });
+    assertEquals(signRes.status, 200);
+
+    const afterSign = await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[1, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: false,
+    });
+    assertEquals(afterSign.status, 409);
+
+    const completedRes = await get("/dev/api/completed");
+    const completed = await completedRes.json();
+    const mine = completed.canvases.find((c: { id: string }) =>
+      c.id === canvasId
+    );
+    assertEquals(mine?.title, "Route Smoke Test");
+    assertEquals(mine?.completedAt !== null, true);
+
+    const activeRes = await get("/dev/api/active");
+    const active = await activeRes.json();
+    assertEquals(
+      active.canvases.some((c: { id: string }) => c.id === canvasId),
+      false,
+    );
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("an undo event carries revertsId pointing at the reverted stroke's id, and doesn't delete it", async () => {
+  const canvasId = ulid();
+  try {
+    const strokeId = ulid();
+    const strokeEventId = ulid();
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: strokeEventId,
+        kind: "stroke",
+        strokeId,
+        cells: cellsBase64([[0, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "undo",
+        strokeId: null,
+        cells: null,
+        revertsId: strokeId,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+
+    const pullRes = await get(`/canvases/${canvasId}/events?since=0`);
+    const pulled = await pullRes.json();
+    assertEquals(
+      pulled.events.length,
+      2,
+      "the stroke event must still be present, untouched",
+    );
+
+    const strokeEvent = pulled.events.find((e: { id: string }) =>
+      e.id === strokeEventId
+    );
+    assertEquals(strokeEvent.kind, "stroke");
+
+    const undoEvent = pulled.events.find((e: { kind: string }) =>
+      e.kind === "undo"
+    );
+    assertEquals(undoEvent.revertsId, strokeId);
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("a push from a different owner than the canvas's creator is rejected", async () => {
+  const canvasId = ulid();
+  try {
+    const firstStrokeId = ulid();
+    await post(
+      `/canvases/${canvasId}/events`,
+      {
+        events: [{
+          id: ulid(),
+          kind: "stroke",
+          strokeId: firstStrokeId,
+          cells: cellsBase64([[0, -1]]),
+          revertsId: null,
+          clientTs: Date.now(),
+        }],
+        heartbeatActive: true,
+      },
+      SESSION_A,
+    );
+    const secondStrokeId = ulid();
+    const res = await post(
+      `/canvases/${canvasId}/events`,
+      {
+        events: [{
+          id: ulid(),
+          kind: "stroke",
+          strokeId: secondStrokeId,
+          cells: cellsBase64([[1, -1]]),
+          revertsId: null,
+          clientTs: Date.now(),
+        }],
+        heartbeatActive: true,
+      },
+      SESSION_B,
+    );
+    assertEquals(res.status, 403);
+
+    const pullRes = await get(`/canvases/${canvasId}/events?since=0`);
+    const pulled = await pullRes.json();
+    assertEquals(
+      pulled.events.length,
+      1,
+      "the rejected push must not have been appended",
+    );
+
+    const signRes = await post(`/canvases/${canvasId}/complete`, {
+      title: "Hijack Attempt",
+    }, SESSION_B);
+    assertEquals(
+      signRes.status,
+      403,
+      "a different owner must not be able to sign the canvas either",
+    );
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("stroke cells round-trip through base64 over the wire", async () => {
+  const canvasId = ulid();
+  try {
+    // index 5, ARGB color -1 (0xFFFFFFFF as int32), encoded as the client
+    // would: 2-byte index + 4-byte signed color, base64'd.
+    const cells = cellsBase64([[5, -1]]);
+
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells,
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+
+    const pullRes = await get(`/canvases/${canvasId}/events?since=0`);
+    const pulled = await pullRes.json();
+    assertEquals(pulled.events[0].cells, cells);
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("dev API responses embed composed pixels reflecting cells and a stroke_id-scoped undo", async () => {
+  const canvasId = ulid();
+  try {
+    const strokeA = ulid();
+    const strokeB = ulid();
+    // Two devices interleaving: A paints pixel 0, B paints pixel 1, A undoes
+    // its own stroke — B's pixel must survive.
+    await post(`/canvases/${canvasId}/events`, {
+      events: [
+        {
+          id: ulid(),
+          kind: "stroke",
+          strokeId: strokeA,
+          cells: cellsBase64([[0, -1]]),
+          revertsId: null,
+          clientTs: 1,
+        },
+        {
+          id: ulid(),
+          kind: "stroke",
+          strokeId: strokeB,
+          cells: cellsBase64([[1, -256]]),
+          revertsId: null,
+          clientTs: 2,
+        },
+      ],
+      heartbeatActive: true,
+    });
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "undo",
+        strokeId: null,
+        cells: null,
+        revertsId: strokeA,
+        clientTs: 3,
+      }],
+      heartbeatActive: true,
+    });
+
+    const activeRes = await get("/dev/api/active");
+    const active = await activeRes.json();
+    const mine = active.canvases.find((c: { id: string }) => c.id === canvasId);
+    assertEquals(
+      "ownerId" in mine,
+      false,
+      "public canvas data must omit ownerId",
+    );
+    const pixelBytes = Uint8Array.from(
+      atob(mine.pixels),
+      (c) => c.charCodeAt(0),
+    );
+    const pixels = new Int32Array(pixelBytes.buffer);
+    assertEquals(pixels[1], -256, "B's pixel must survive A's undo");
+    assertEquals(
+      pixels[1] !== pixels[0],
+      true,
+      "A's pixel must have been reverted, unlike B's",
+    );
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("the SSE stream sends real diffs for strokes, and a full resync only for undo", async () => {
+  const canvasId = ulid();
+  try {
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[3, -16776961]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+
+    const streamRes = await handler(
+      new Request(`http://localhost/canvases/${canvasId}/stream`),
+    );
+    const reader = streamRes.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    // Persists leftover buffer across calls — a read() chunk can contain
+    // more than one "data: ...\n\n" frame (or a partial one), so discarding
+    // unconsumed bytes after extracting the first frame would silently drop
+    // or misalign later messages.
+    async function nextMessage(): Promise<
+      { type: string; [k: string]: unknown }
+    > {
+      while (!buffer.includes("\n\n")) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error("stream ended before a message arrived");
+        buffer += decoder.decode(value, { stream: true });
+      }
+      const separatorIndex = buffer.indexOf("\n\n");
+      const frame = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      if (frame.startsWith(": ")) return await nextMessage(); // keep-alive comment
+      return JSON.parse(frame.replace(/^data: /, ""));
+    }
+
+    // The cross-instance poll-loop backstop can independently notice the
+    // same change the immediate same-process broadcast already sent,
+    // producing a harmless redundant "diff" — skip any of those while
+    // waiting for a message of a specific type.
+    async function nextMessageOfType(type: string) {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const msg = await nextMessage();
+        if (msg.type === type) return msg;
+      }
+      throw new Error(`no "${type}" message arrived within 5 messages`);
+    }
+
+    const initial = await nextMessage();
+    assertEquals(initial.type, "snapshot");
+
+    const strokeId = ulid();
+    const strokeClientTs = Date.now();
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId,
+        cells: cellsBase64([[10, -65536]]),
+        revertsId: null,
+        clientTs: strokeClientTs,
+      }],
+      heartbeatActive: true,
+    });
+    const diffMsg = await nextMessageOfType("diff");
+    assertEquals(diffMsg.batches, [{
+      ts: strokeClientTs,
+      cells: [[10, -65536]],
+    }]);
+
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "undo",
+        strokeId: null,
+        cells: null,
+        revertsId: strokeId,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+    await nextMessageOfType("snapshot");
+
+    await reader.cancel();
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});

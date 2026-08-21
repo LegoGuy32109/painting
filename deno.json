@@ -1,15 +1,26 @@
 {
   "tasks": {
-    "dev": "deno run -A src/server/main.ts",
-    "check": "deno check src tests",
-    "test": "deno test --allow-read=public,src/client tests"
+    "dev": "deno run -A --env-file src/server/main.ts",
+    "check": "deno check src tests scripts",
+    "test": "deno test --allow-read=public,src/client,src/shared --ignore=tests/db_test.ts,tests/sync-routes_test.ts tests",
+    "test:replay": "deno test --allow-read=src/client,src/shared tests/live-replay_test.js",
+    "test:db": "deno test --allow-net --allow-env --allow-read tests/db_test.ts",
+    "test:routes": "deno test --allow-net --allow-env --allow-read tests/sync-routes_test.ts",
+    "test:e2e": "deno run --env-file --allow-net --allow-env --allow-read --allow-run scripts/ephemeral-test-db.ts",
+    "migrate:prod": "deno run --env-file --allow-net --allow-env --allow-read scripts/migrate-prod.ts",
+    "bootstrap:dev": "deno run --env-file --allow-net --allow-env --allow-read scripts/bootstrap-dev-db.ts",
+    "backup:db": "deno run --env-file --allow-net --allow-env --allow-read --allow-write scripts/backup-environment-db.ts",
+    "clear:db": "deno run --env-file --allow-net --allow-env scripts/clear-environment-db.ts",
+    "save": "deno run --allow-run --allow-read --allow-write scripts/save.ts",
+    "seed:dev": "deno run --allow-net --allow-env scripts/seed-dev-canvases.ts"
   },
   "compilerOptions": {
     "checkJs": true,
     "lib": ["dom", "dom.iterable", "deno.ns"]
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@1"
+    "@std/assert": "jsr:@std/assert@1.0.19",
+    "@tursodatabase/serverless/compat": "npm:@tursodatabase/serverless@1.4.0/compat"
   },
   "deploy": {
     "org": "legoguy32109",

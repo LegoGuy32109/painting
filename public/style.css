@@ -1,7 +1,7 @@
 @font-face {
   font-family: "Minecraftia";
   src: url("/Minecraftia-Regular.ttf") format("truetype");
-  font-display: block;
+  font-display: optional;
 }
 
 :root {
@@ -60,10 +60,10 @@ input {
 }
 
 button {
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 0.25rem;
+  border-radius: 0;
   background: #fffdf7;
   cursor: default;
   touch-action: manipulation;
@@ -89,11 +89,21 @@ input:focus-visible {
   display: grid;
   justify-items: center;
   width: min(100%, 72rem);
-  min-height: 100dvh;
+  min-height: calc(100dvh - 4rem);
   margin: 0 auto;
   padding: env(safe-area-inset-top) max(1rem,
     env(safe-area-inset-right))
     max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+}
+
+.sync-footer {
+  padding: 0.25rem max(1rem, env(safe-area-inset-right))
+    max(0.5rem, env(safe-area-inset-bottom)) max(1rem,
+    env(safe-area-inset-left));
+  color: var(--border);
+  font-family: monospace;
+  font-size: 0.75rem;
+  text-align: center;
 }
 
 .canvas-header {
@@ -198,7 +208,7 @@ input:focus-visible {
 .selected-color {
   --well-size: 100%;
   min-width: 0;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   touch-action: none;
 }
 
@@ -258,13 +268,13 @@ input:focus-visible {
   }
 
   button {
-    min-height: 2.125rem;
+    min-height: 2.75rem;
     padding: 0.375rem 0.5rem;
     font-size: 0.75rem;
   }
 
   .selected-color {
-    min-height: 2.125rem;
+    min-height: 2.75rem;
   }
 
   .canvas-header {
