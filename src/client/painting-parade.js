@@ -247,7 +247,7 @@ class PaintingParade extends HTMLElement {
 
   /** @param {PublicCanvas} canvas */
   async completedEntry(canvas) {
-    const response = await fetch(`/canvases/${canvas.id}/replay?v=3`);
+    const response = await fetch(`/canvases/${canvas.id}/replay?v=4`);
     if (!response.ok) throw new Error(`replay failed: ${response.status}`);
     const timeline =
       /** @type {CanvasReplayResponse} */ (await response.json());
@@ -351,7 +351,7 @@ class PaintingParade extends HTMLElement {
       }
       if (changed) drawPixels(entry.context, entry.pixels);
       if (
-        entry.nextStep === entry.timeline.steps.length &&
+        elapsed >= entry.timeline.durationMs &&
         entry.state.textContent !== "SIGNED"
       ) {
         entry.pixels = decodePixels(entry.timeline.finalPixels);
