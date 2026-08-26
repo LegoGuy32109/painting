@@ -4,11 +4,13 @@
 /** @typedef {import("../shared/paint-types.d.ts").CompletedFeedResponse} CompletedFeedResponse */
 /** @typedef {import("../shared/paint-types.d.ts").LiveStreamMessage} LiveStreamMessage */
 /** @typedef {import("../shared/paint-types.d.ts").PublicCanvas} PublicCanvas */
-/** @typedef {{ id: string, kind: "active" | "completed", figure: HTMLElement, context: CanvasRenderingContext2D, pixels: Int32Array, state: HTMLElement, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number, playbackDurationMs: number }} ParadeEntry */
+/** @typedef {{ id: string, kind: "active" | "completed" | "placeholder", figure: HTMLElement, context: CanvasRenderingContext2D, pixels: Int32Array, state: HTMLElement, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number, playbackDurationMs: number, hydrating: boolean }} ParadeEntry */
+/** @typedef {{ sequence: number }} EntryLayout */
 
 import { LiveReplay } from "./live-replay.js";
 import { parseLiveStreamMessage } from "./live-stream-message.js";
 import { ParadeState } from "./parade-state.js";
+import { createPixels } from "../shared/paint-engine.js";
 import {
   applyEncodedCells,
   decodePixels,
@@ -46,7 +48,6 @@ class PaintingParade extends HTMLElement {
     this.fetchingCompleted = false;
     this.hidden = document.visibilityState !== "visible";
     this.spawnSequence = 0;
-    this.bootstrapped = false;
     this.liveSynced = false;
     this.hadLive = false;
     this.completedResumeAt = 0;
@@ -56,9 +57,11 @@ class PaintingParade extends HTMLElement {
   connectedCallback() {
     if (this.root.childNodes.length === 0) this.build();
     document.addEventListener("visibilitychange", this.onVisibility);
+    this.bootstrapPlaceholders();
     this.connect();
     void this.fetchCompletedPage();
     this.drainTimer = setInterval(() => this.drain(), 33);
+    this.scheduleNextSpawn();
   }
 
   disconnectedCallback() {
@@ -91,6 +94,8 @@ class PaintingParade extends HTMLElement {
       figure[data-row="top"] { top:18%; }
       figure[data-row="bottom"] { top:66%; }
       canvas { display:block; width:100%; aspect-ratio:1; image-rendering:pixelated; background:#fff9ff; }
+      figure[data-kind="placeholder"] canvas { opacity:.38; animation:loading-pulse .9s steps(2,end) infinite; }
+      figure[data-kind="placeholder"] figcaption { color:#796f5e; }
       figcaption { display:flex; justify-content:space-between; gap:.5rem; min-height:1.3rem; padding-top:.45rem; overflow:hidden; font:clamp(.55rem,1.4vw,.72rem)/1.2 ui-monospace,monospace; white-space:nowrap; }
       .title { overflow:hidden; text-overflow:ellipsis; }
       .live { color:#b02e26; }
@@ -100,6 +105,7 @@ class PaintingParade extends HTMLElement {
       :host([mode="display"]) figure[data-row="bottom"] { top:59%; }
       :host([paused]) figure { animation-play-state:paused; }
       @keyframes travel { from { transform:translate3d(0,0,0); } to { transform:translate3d(calc(100vw + 170%),0,0); } }
+      @keyframes loading-pulse { 50% { opacity:.62; } }
       @media (max-width:34rem) {
         :host([mode="ambient"]) figure[data-row="top"] { top:18%; }
         :host([mode="ambient"]) figure[data-row="bottom"] { top:calc(18% + clamp(9rem,30vw,11rem)); }
@@ -153,7 +159,7 @@ class PaintingParade extends HTMLElement {
         this.livePixels.set(item.canvas.id, decodePixels(item.canvas.pixels));
         this.liveSequences.set(item.canvas.id, item.headSequence);
       }
-      if (!this.bootstrapped) void this.bootstrap();
+      void this.fillPlaceholders();
       return;
     }
     if (message.type === "snapshot") {
@@ -168,7 +174,7 @@ class PaintingParade extends HTMLElement {
         visible.replay?.reset();
         drawPixels(visible.context, visible.pixels);
       }
-      this.scheduleNextSpawn(0);
+      void this.fillPlaceholders();
       return;
     }
     if (message.type === "diff") {
@@ -195,7 +201,7 @@ class PaintingParade extends HTMLElement {
         visible.state.textContent = "SIGNED";
         visible.figure.dataset.kind = "completed";
       }
-      this.scheduleNextSpawn(0);
+      void this.fillPlaceholders();
       return;
     }
     this.state.removeActive(message.canvasId);
@@ -204,19 +210,27 @@ class PaintingParade extends HTMLElement {
     this.liveSequences.delete(message.canvasId);
     if (this.state.active.size === 0) {
       void this.fetchCompletedPage();
-      this.scheduleNextSpawn(0);
+      void this.fillPlaceholders();
     }
   }
 
-  async bootstrap() {
-    this.bootstrapped = true;
-    await Promise.all(
-      Array.from(
-        { length: Math.min(config.bootstrapCount, this.capacity) },
-        () => this.spawnNext(true),
-      ),
+  bootstrapPlaceholders() {
+    if (this.visible.size > 0) return;
+    const count = Math.min(config.bootstrapCount, this.capacity);
+    for (let index = 0; index < count; index++) {
+      const entry = this.placeholderEntry();
+      this.visible.set(entry.id, entry);
+      this.stage.append(entry.figure);
+      this.seekIntoView(entry, (count - index - 1) * config.spawnIntervalMs);
+    }
+  }
+
+  async fillPlaceholders() {
+    if (!this.liveSynced) return;
+    const placeholders = [...this.visible.values()].filter((entry) =>
+      entry.kind === "placeholder" && !entry.hydrating
     );
-    this.scheduleNextSpawn();
+    await Promise.all(placeholders.map(() => this.spawnNext()));
   }
 
   async fetchCompletedPage() {
@@ -233,9 +247,7 @@ class PaintingParade extends HTMLElement {
       const page = /** @type {CompletedFeedResponse} */ (await response.json());
       this.state.addCompletedPage(page.paintings, page.nextCursor);
       if (!this.liveSynced) return;
-      if (!this.bootstrapped && this.state.active.size === 0) {
-        void this.bootstrap();
-      } else this.scheduleNextSpawn(0);
+      void this.fillPlaceholders();
     } catch (error) {
       this.dispatchEvent(new CustomEvent("parade-error", { detail: error }));
     } finally {
@@ -243,29 +255,48 @@ class PaintingParade extends HTMLElement {
     }
   }
 
-  /** @param {boolean} [bootstrap] */
-  async spawnNext(bootstrap = false) {
-    if (this.hidden || this.visible.size >= this.capacity) return;
+  async spawnNext() {
+    if (this.hidden) return;
+    const placeholder = [...this.visible.values()].find((entry) =>
+      entry.kind === "placeholder" && !entry.hydrating
+    );
+    if (!this.liveSynced) {
+      if (this.visible.size < this.capacity) this.appendPlaceholder();
+      return;
+    }
+    if (!placeholder && this.visible.size >= this.capacity) return;
     if (
       this.state.active.size === 0 && Date.now() < this.completedResumeAt
     ) {
-      this.scheduleNextSpawn(this.completedResumeAt - Date.now());
       return;
     }
     if (this.state.needsCompletedPage()) void this.fetchCompletedPage();
     const candidate = this.state.next(new Set(this.visible.keys()));
-    if (!candidate) return;
+    if (!candidate) {
+      if (!placeholder && this.visible.size < this.capacity) {
+        this.appendPlaceholder();
+      }
+      return;
+    }
+    if (placeholder) placeholder.hydrating = true;
     try {
+      const layout = placeholder
+        ? { sequence: Number(placeholder.figure.dataset.sequence) }
+        : undefined;
       const entry = candidate.kind === "active"
-        ? this.activeEntry(candidate.canvas)
-        : await this.completedEntry(candidate.canvas);
+        ? this.activeEntry(candidate.canvas, layout)
+        : await this.completedEntry(candidate.canvas, layout);
       if (candidate.kind === "completed" && this.state.active.size > 0) {
         this.state.signedFirst.unshift(candidate.canvas.id);
+        if (placeholder) placeholder.hydrating = false;
         return;
       }
-      this.visible.set(candidate.canvas.id, entry);
-      this.stage.append(entry.figure);
-      if (bootstrap) this.seekIntoView(entry);
+      if (placeholder && this.visible.has(placeholder.id)) {
+        this.replacePlaceholder(placeholder, entry);
+      } else {
+        this.visible.set(candidate.canvas.id, entry);
+        this.stage.append(entry.figure);
+      }
       if (entry.kind === "completed") this.startCompletedPlayback(entry);
       this.dispatchEvent(
         new CustomEvent("parade-spawn", {
@@ -285,8 +316,15 @@ class PaintingParade extends HTMLElement {
         at: performance.now(),
       });
     } catch (error) {
+      if (placeholder) placeholder.hydrating = false;
       this.dispatchEvent(new CustomEvent("parade-error", { detail: error }));
     }
+  }
+
+  appendPlaceholder() {
+    const entry = this.placeholderEntry();
+    this.visible.set(entry.id, entry);
+    this.stage.append(entry.figure);
   }
 
   /** @param {number} [delay] */
@@ -298,10 +336,10 @@ class PaintingParade extends HTMLElement {
     }, delay);
   }
 
-  /** @param {PublicCanvas} canvas @param {"active" | "completed"} kind @param {Int32Array} pixels */
-  baseEntry(canvas, kind, pixels) {
+  /** @param {PublicCanvas} canvas @param {"active" | "completed" | "placeholder"} kind @param {Int32Array} pixels @param {EntryLayout} [layout] */
+  baseEntry(canvas, kind, pixels, layout) {
     const figure = document.createElement("figure");
-    const sequence = this.spawnSequence++;
+    const sequence = layout?.sequence ?? this.spawnSequence++;
     const row = sequence % 2 === 0 ? "top" : "bottom";
     const narrow = matchMedia("(max-width: 40rem)").matches;
     const columns = narrow ? 2 : 4;
@@ -320,11 +358,20 @@ class PaintingParade extends HTMLElement {
     const caption = document.createElement("figcaption");
     const title = document.createElement("span");
     title.className = "title";
-    title.textContent = canvas.title ||
-      (kind === "active" ? "Painting now" : "Untitled");
+    title.textContent = kind === "placeholder"
+      ? "Loading painting"
+      : canvas.title || (kind === "active" ? "Painting now" : "Untitled");
     const state = document.createElement("span");
-    state.className = kind === "active" ? "live" : "replay";
-    state.textContent = kind === "active" ? "LIVE" : "REPLAY";
+    state.className = kind === "active"
+      ? "live"
+      : kind === "placeholder"
+      ? "loading"
+      : "replay";
+    state.textContent = kind === "active"
+      ? "LIVE"
+      : kind === "placeholder"
+      ? "LOADING"
+      : "REPLAY";
     caption.append(title, state);
     figure.append(canvasElement, caption);
     const entry = /** @type {ParadeEntry} */ ({
@@ -340,6 +387,7 @@ class PaintingParade extends HTMLElement {
       animation: null,
       playbackStartedAt: 0,
       playbackDurationMs: 0,
+      hydrating: false,
     });
     figure.addEventListener("animationend", () => this.retire(entry), {
       once: true,
@@ -347,17 +395,33 @@ class PaintingParade extends HTMLElement {
     return entry;
   }
 
-  /** @param {PublicCanvas} canvas */
-  activeEntry(canvas) {
+  placeholderEntry() {
+    const sequence = this.spawnSequence;
+    return this.baseEntry(
+      {
+        id: `loading-${sequence}`,
+        title: null,
+        pixels: "",
+        createdAt: 0,
+        lastStrokeAt: null,
+        completedAt: null,
+      },
+      "placeholder",
+      createPixels(),
+    );
+  }
+
+  /** @param {PublicCanvas} canvas @param {EntryLayout} [layout] */
+  activeEntry(canvas, layout) {
     const pixels =
       (this.livePixels.get(canvas.id) ?? decodePixels(canvas.pixels)).slice();
-    const entry = this.baseEntry(canvas, "active", pixels);
+    const entry = this.baseEntry(canvas, "active", pixels, layout);
     entry.replay = new LiveReplay({ lagMs: 500, catchUpThresholdMs: 2_000 });
     return entry;
   }
 
-  /** @param {PublicCanvas} canvas */
-  async completedEntry(canvas) {
+  /** @param {PublicCanvas} canvas @param {EntryLayout} [layout] */
+  async completedEntry(canvas, layout) {
     let replay = this.replayCache.get(canvas.id);
     if (!replay) {
       replay = fetch(`/canvases/${canvas.id}/replay?v=5`).then((response) => {
@@ -371,20 +435,36 @@ class PaintingParade extends HTMLElement {
       canvas,
       "completed",
       decodePixels(timeline.initialPixels),
+      layout,
     );
     entry.timeline = timeline;
     return entry;
   }
 
-  /** @param {ParadeEntry} entry */
-  seekIntoView(entry) {
+  /** @param {ParadeEntry} placeholder @param {ParadeEntry} entry */
+  replacePlaceholder(placeholder, entry) {
+    const currentTime = placeholder.figure.getAnimations()[0]?.currentTime;
+    placeholder.figure.replaceWith(entry.figure);
+    if (currentTime !== null && currentTime !== undefined) {
+      const animation = entry.figure.getAnimations()[0];
+      if (animation) animation.currentTime = currentTime;
+    }
+    this.visible.delete(placeholder.id);
+    this.visible.set(entry.id, entry);
+  }
+
+  /** @param {ParadeEntry} entry @param {number} [advanceMs] */
+  seekIntoView(entry, advanceMs = 0) {
     const animation = entry.figure.getAnimations()[0];
     if (!animation) return;
     const duration = Number(animation.effect?.getComputedTiming().duration);
     const width = entry.figure.getBoundingClientRect().width;
     const distance = this.stage.getBoundingClientRect().width + width * 1.7;
     if (duration > 0 && distance > 0) {
-      animation.currentTime = duration * width * 1.08 / distance;
+      animation.currentTime = Math.min(
+        duration - 1,
+        duration * width * 1.08 / distance + advanceMs,
+      );
     }
   }
 
@@ -442,7 +522,6 @@ class PaintingParade extends HTMLElement {
   retire(entry) {
     entry.figure.remove();
     this.visible.delete(entry.id);
-    this.scheduleNextSpawn(0);
   }
 
   updateLivePriority() {
@@ -463,7 +542,7 @@ class PaintingParade extends HTMLElement {
       return;
     }
     this.connect();
-    this.scheduleNextSpawn(0);
+    this.scheduleNextSpawn();
   }
 }
 

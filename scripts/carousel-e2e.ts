@@ -101,14 +101,49 @@ try {
       "request",
       (request) => requests.get(testCase.page)!.push(request.url()),
     );
+    await testCase.page.route("**/api/live-stream", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await route.continue();
+    });
     await testCase.page.goto(`${baseUrl}${testCase.path}`, {
       waitUntil: "domcontentloaded",
+    });
+    await testCase.page.waitForFunction(() =>
+      (document.querySelector("painting-parade")?.shadowRoot?.querySelectorAll(
+        'figure[data-kind="placeholder"]',
+      ).length ?? 0) >= 3
+    );
+    const initialFlow = await testCase.page.evaluate(() =>
+      [
+        ...document.querySelector("painting-parade")!.shadowRoot!
+          .querySelectorAll("figure"),
+      ].slice(0, 3).map((figure) => ({
+        kind: /** @type {HTMLElement} */ (figure).dataset.kind,
+        row: /** @type {HTMLElement} */ (figure).dataset.row,
+        left: figure.getBoundingClientRect().left,
+      }))
+    );
+    assertEquals(
+      initialFlow.map((entry) => entry.kind),
+      ["placeholder", "placeholder", "placeholder"],
+    );
+    assertEquals(
+      initialFlow.map((entry) => entry.row),
+      ["top", "bottom", "top"],
+    );
+    assert(
+      initialFlow[0].left > initialFlow[1].left + 10,
+      `${testCase.name}: first two loading cards should be time-staggered`,
+    );
+    await testCase.page.screenshot({
+      path: new URL(`${testCase.name}-loading.png`, artifactDir).pathname,
+      fullPage: true,
     });
     await testCase.page.waitForFunction(
       () =>
         (document.querySelector("painting-parade")?.shadowRoot
           ?.querySelectorAll(
-            "figure",
+            'figure:not([data-kind="placeholder"])',
           ).length ?? 0) >= 2,
       undefined,
       { timeout: 60_000 },
