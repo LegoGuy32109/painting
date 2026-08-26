@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 backups/
+test-results/
 
 # Secrets - .env.example stays committed, .env never does
 .env

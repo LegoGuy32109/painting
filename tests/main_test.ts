@@ -108,6 +108,7 @@ Deno.test("returns the browser modules", async () => {
       "/shared/palette-engine.js",
       "/shared/pixel-render.js",
       "/live-replay.js",
+      "/live-stream-message.js",
       "/site-nav.js",
       "/painting-parade.js",
       "/collection-page.js",

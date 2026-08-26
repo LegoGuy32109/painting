@@ -347,6 +347,85 @@ export async function listRecentlyCompleted(
   return res.rows.map(rowToSummary);
 }
 
+export interface CompletedCursor {
+  completedAt: number;
+  id: string;
+}
+
+/**
+ * Pages signed paintings without scanning or returning the whole collection.
+ * The id tie-breaker makes the keyset stable when several paintings are
+ * signed during the same millisecond.
+ */
+export async function listCompletedPage(
+  db: Client,
+  limit: number,
+  cursor: CompletedCursor | null = null,
+): Promise<CanvasRecord[]> {
+  const where = cursor
+    ? "WHERE completed_at IS NOT NULL AND (completed_at < ? OR (completed_at = ? AND id < ?)) "
+    : "WHERE completed_at IS NOT NULL ";
+  const args = cursor
+    ? [cursor.completedAt, cursor.completedAt, cursor.id, limit]
+    : [limit];
+  const res = await db.execute({
+    sql:
+      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at " +
+      `FROM canvases ${where}ORDER BY completed_at DESC, id DESC LIMIT ?`,
+    args,
+  });
+  return res.rows.map(rowToRecord);
+}
+
+export async function listCompletedByOwnerPrefix(
+  db: Client,
+  ownerPrefix: string,
+): Promise<CanvasRecord[]> {
+  const res = await db.execute({
+    sql:
+      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at " +
+      "FROM canvases WHERE completed_at IS NOT NULL AND owner_id LIKE ? ORDER BY completed_at DESC",
+    args: [`${ownerPrefix}%`],
+  });
+  return res.rows.map(rowToRecord);
+}
+
+export async function globalHeadSequence(db: Client): Promise<number> {
+  const res = await db.execute(
+    "SELECT COALESCE(MAX(sequence), 0) AS head FROM canvas_events",
+  );
+  return Number(res.rows[0].head);
+}
+
+export async function pullGlobalEventsSince(
+  db: Client,
+  since: number,
+  limit = 500,
+): Promise<CanvasEventRow[]> {
+  const res = await db.execute({
+    sql:
+      "SELECT sequence, id, canvas_id, kind, stroke_id, cells, reverts_id, client_ts, received_at " +
+      "FROM canvas_events WHERE sequence > ? ORDER BY sequence ASC LIMIT ?",
+    args: [since, limit],
+  });
+  return res.rows.map(rowToEvent);
+}
+
+export async function pullEventsForCanvases(
+  db: Client,
+  canvasIds: string[],
+): Promise<CanvasEventRow[]> {
+  if (canvasIds.length === 0) return [];
+  const placeholders = canvasIds.map(() => "?").join(", ");
+  const res = await db.execute({
+    sql:
+      "SELECT sequence, id, canvas_id, kind, stroke_id, cells, reverts_id, client_ts, received_at " +
+      `FROM canvas_events WHERE canvas_id IN (${placeholders}) ORDER BY sequence ASC`,
+    args: canvasIds,
+  });
+  return res.rows.map(rowToEvent);
+}
+
 export async function pullEventsSince(
   db: Client,
   canvasId: string,

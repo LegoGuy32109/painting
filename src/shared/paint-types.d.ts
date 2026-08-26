@@ -195,6 +195,55 @@ export interface DisplayFeedResponse {
   completed: PublicCanvas[];
 }
 
+export interface CompletedFeedResponse {
+  paintings: PublicCanvas[];
+  nextCursor: string | null;
+}
+
+export interface LiveSyncMessage {
+  version: 1;
+  type: "sync";
+  canvases: Array<{ canvas: PublicCanvas; headSequence: number }>;
+}
+
+export interface LiveSnapshotMessage {
+  version: 1;
+  type: "snapshot";
+  canvas: PublicCanvas;
+  headSequence: number;
+}
+
+export interface LiveDiffMessage {
+  version: 1;
+  type: "diff";
+  canvasId: string;
+  headSequence: number;
+  batches: Array<
+    { sequence: number; ts: number; cells: Array<[number, number]> }
+  >;
+}
+
+export interface LiveCompletedMessage {
+  version: 1;
+  type: "completed";
+  canvas: PublicCanvas;
+  headSequence: number;
+}
+
+export interface LiveInactiveMessage {
+  version: 1;
+  type: "inactive";
+  canvasId: string;
+  reason: "idle" | "completed" | "missing";
+}
+
+export type LiveStreamMessage =
+  | LiveSyncMessage
+  | LiveSnapshotMessage
+  | LiveDiffMessage
+  | LiveCompletedMessage
+  | LiveInactiveMessage;
+
 export interface ReplayDiffStep {
   type: "diff";
   atMs: number;

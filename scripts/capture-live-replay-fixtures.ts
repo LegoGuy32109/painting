@@ -1,5 +1,5 @@
 /**
- * Copies the three hand-painted recordings from painting-local into a stable
+ * Copies selected hand-painted recordings from painting-local into a stable
  * test fixture. Tests then replay real sessions without network credentials.
  *
  * deno run --allow-env --allow-net --allow-write scripts/capture-live-replay-fixtures.ts
@@ -10,6 +10,10 @@ const canvases = [
   { id: "01M0DZ4Z9QM663V6FB9S", title: "claude returning" },
   { id: "01M0E6962H4EQREDJSTM", title: "bubblegum man" },
   { id: "01M0E6F0ZT4F7RKYET0A", title: "snake in clouds" },
+  { id: "01M0Z1GAJPD7S293VHNQS27D5G", title: "Pludddle" },
+  { id: "01M0Z06CX6TZ3YJ56TJH4Q083Z", title: "creamsicle" },
+  { id: "01M0KKGQ0QQ8GSQDC7ZQYVNYAY", title: "Mr. Luchador" },
+  { id: "01M0GN4AXKRSEN7VRJCP915F0X", title: "squickle" },
 ];
 
 const db = createDb();

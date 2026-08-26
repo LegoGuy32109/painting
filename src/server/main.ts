@@ -16,13 +16,17 @@ import {
   getOrCreateDraft,
   headSequence,
   listActiveCanvases,
+  listCompletedByOwnerPrefix,
+  listCompletedPage,
   listGuestCompleted,
   listRandomCompleted,
   listRecentlyCompleted,
   type NewEvent,
+  pullEventsForCanvases,
   pullEventsSince,
   storeCanvasPixels,
 } from "./db.ts";
+import { LiveHub } from "./live-hub.ts";
 import { createPixels } from "../shared/paint-engine.js";
 import { decodeCells } from "../shared/cell-codec.js";
 import { composeCanvas } from "../shared/compose.js";
@@ -43,6 +47,7 @@ import {
 import { consumeGuestMutation } from "./rate-limit.ts";
 import { buildCanvasReplay } from "./replay.ts";
 import type {
+  CompletedFeedResponse,
   DisplayFeedResponse,
   EnsureDraftResponse,
   GuestCanvasesResponse,
@@ -282,6 +287,66 @@ async function publicDraft(canvas: CanvasRecord): Promise<PublicCanvas> {
   };
 }
 
+async function activeStreamCanvases() {
+  const active = await listActiveCanvases(getDb());
+  const events = await pullEventsForCanvases(
+    getDb(),
+    active.map((canvas) => canvas.id),
+  );
+  const byCanvas = Map.groupBy(events, (event) => event.canvasId);
+  return active.map((canvas) => {
+    const canvasEvents = byCanvas.get(canvas.id) ?? [];
+    const { ownerId: _ownerId, ...summary } = canvas;
+    return {
+      canvas: {
+        ...summary,
+        pixels: bytesToBase64(
+          new Uint8Array(composeCanvas(canvasEvents).buffer),
+        ),
+      },
+      headSequence: canvasEvents.at(-1)?.sequence ?? 0,
+    };
+  });
+}
+
+let liveHub: LiveHub | null = null;
+function getLiveHub(): LiveHub {
+  return liveHub ??= new LiveHub(getDb(), {
+    active: activeStreamCanvases,
+    async snapshot(canvasId) {
+      const canvases = await activeStreamCanvases();
+      return canvases.find((item) => item.canvas.id === canvasId) ?? null;
+    },
+    async completed(canvasId) {
+      const canvas = await getCompletedCanvas(getDb(), canvasId);
+      return canvas
+        ? {
+          canvas: publicCanvas(canvas),
+          headSequence: await headSequence(getDb(), canvasId),
+        }
+        : null;
+    },
+  });
+}
+
+function encodeCompletedCursor(completedAt: number, id: string): string {
+  return btoa(JSON.stringify([completedAt, id]));
+}
+
+function decodeCompletedCursor(value: string | null) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(atob(value));
+    if (
+      !Array.isArray(parsed) || parsed.length !== 2 ||
+      !Number.isSafeInteger(parsed[0]) || typeof parsed[1] !== "string"
+    ) throw new Error();
+    return { completedAt: parsed[0] as number, id: parsed[1] as string };
+  } catch {
+    throw new HttpError(400, "invalid completed cursor");
+  }
+}
+
 /**
  * Deno.serve is documented to catch a handler's thrown/rejected error and
  * respond 500 on its own — this wrapper exists anyway as an explicit,
@@ -455,6 +520,62 @@ async function route(req: Request): Promise<Response> {
     return Response.json(response, {
       headers: {
         "cache-control": "public, max-age=1, stale-while-revalidate=4",
+      },
+    });
+  }
+
+  if (url.pathname === "/api/completed-feed" && req.method === "GET") {
+    const requested = Number(url.searchParams.get("limit") ?? "20");
+    const limit = Number.isSafeInteger(requested)
+      ? Math.max(1, Math.min(50, requested))
+      : 20;
+    const cursor = decodeCompletedCursor(url.searchParams.get("cursor"));
+    const page = await listCompletedPage(getDb(), limit + 1, cursor);
+    const hasMore = page.length > limit;
+    const paintings = page.slice(0, limit);
+    const last = paintings.at(-1);
+    const response: CompletedFeedResponse = {
+      paintings: paintings.map(publicCanvas),
+      nextCursor:
+        hasMore && last?.completedAt !== null && last?.completedAt !== undefined
+          ? encodeCompletedCursor(last.completedAt, last.id)
+          : null,
+    };
+    return Response.json(response, {
+      headers: {
+        "cache-control": "public, max-age=2, stale-while-revalidate=8",
+      },
+    });
+  }
+
+  if (url.pathname === "/api/live-stream" && req.method === "GET") {
+    let keepAlive: ReturnType<typeof setInterval> | undefined;
+    let streamController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        streamController = controller;
+        await getLiveHub().subscribe(controller);
+        keepAlive = setInterval(() => {
+          try {
+            controller.enqueue(new TextEncoder().encode(": keep-alive\n\n"));
+          } catch {
+            if (keepAlive) clearInterval(keepAlive);
+          }
+        }, 15_000);
+      },
+      cancel() {
+        if (streamController) getLiveHub().unsubscribe(streamController);
+        if (keepAlive) clearInterval(keepAlive);
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        "connection": "keep-alive",
+        "x-accel-buffering": "no",
       },
     });
   }
@@ -656,6 +777,9 @@ async function route(req: Request): Promise<Response> {
     await storeCanvasPixels(getDb(), canvasId, pixels);
     const record = await getCompletedCanvas(getDb(), canvasId);
     if (!record) throw new Error("completed canvas disappeared");
+    const completedHead = await headSequence(getDb(), canvasId);
+    getLiveHub().completed(publicCanvas(record), completedHead);
+    displayFeedCache = null;
     return Response.json({
       ok: true,
       canvas: publicCanvas(record),
@@ -697,6 +821,32 @@ async function route(req: Request): Promise<Response> {
     });
   }
 
+  if (
+    url.pathname === "/dev/api/e2e/sign-simulated" && req.method === "POST" &&
+    Deno.env.get("PAINTING_E2E") === "1"
+  ) {
+    const now = Date.now();
+    await getDb().execute({
+      sql:
+        "UPDATE canvases SET title = 'Signed simulation', completed_at = ?, client_reported_active = 0 " +
+        "WHERE owner_id LIKE 'e2e-live-%' AND completed_at IS NULL",
+      args: [now],
+    });
+    const completed = await listCompletedByOwnerPrefix(getDb(), "e2e-live-");
+    const events = await pullEventsForCanvases(
+      getDb(),
+      completed.map((canvas) => canvas.id),
+    );
+    const byCanvas = Map.groupBy(events, (event) => event.canvasId);
+    for (const canvas of completed) {
+      getLiveHub().completed(
+        publicCanvas(canvas),
+        byCanvas.get(canvas.id)?.at(-1)?.sequence ?? 0,
+      );
+    }
+    return Response.json({ signed: completed.length });
+  }
+
   if (url.pathname === "/dev/api/active") {
     const canvases = await listActiveCanvases(getDb());
     return Response.json({ canvases: await withComposedPixels(canvases) });
@@ -734,8 +884,10 @@ async function route(req: Request): Promise<Response> {
   if (
     url.pathname === "/app.js" || url.pathname === "/sync.js" ||
     url.pathname === "/local-db.js" || url.pathname === "/live-replay.js" ||
+    url.pathname === "/live-stream-message.js" ||
     url.pathname === "/site-nav.js" ||
     url.pathname === "/painting-parade.js" ||
+    url.pathname === "/parade-state.js" ||
     url.pathname === "/collection-page.js" ||
     url.pathname === "/editor-page.js"
   ) {
@@ -780,5 +932,6 @@ async function route(req: Request): Promise<Response> {
 
 if (import.meta.main) {
   assertGuestSessionConfigured();
-  Deno.serve({ automaticCompression: true }, handler);
+  const configuredPort = Number(Deno.env.get("PORT") ?? "8000");
+  Deno.serve({ automaticCompression: true, port: configuredPort }, handler);
 }
