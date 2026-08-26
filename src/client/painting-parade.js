@@ -4,8 +4,8 @@
 /** @typedef {import("../shared/paint-types.d.ts").CompletedFeedResponse} CompletedFeedResponse */
 /** @typedef {import("../shared/paint-types.d.ts").LiveStreamMessage} LiveStreamMessage */
 /** @typedef {import("../shared/paint-types.d.ts").PublicCanvas} PublicCanvas */
-/** @typedef {{ id: string, kind: "active" | "completed" | "placeholder", figure: HTMLElement, context: CanvasRenderingContext2D, pixels: Int32Array, state: HTMLElement, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number, playbackDurationMs: number, hydrating: boolean }} ParadeEntry */
-/** @typedef {{ sequence: number }} EntryLayout */
+/** @typedef {{ canvas: PublicCanvas, kind: "active" | "completed" }} ParadeCandidate */
+/** @typedef {{ index: number, id: string | null, kind: "active" | "completed" | "placeholder", figure: HTMLElement, context: CanvasRenderingContext2D, title: HTMLElement, state: HTMLElement, pixels: Int32Array, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number, playbackDurationMs: number, assignment: number, hydrating: boolean, pendingCandidate: ParadeCandidate | null }} ParadeSlot */
 
 import { LiveReplay } from "./live-replay.js";
 import { parseLiveStreamMessage } from "./live-stream-message.js";
@@ -19,9 +19,8 @@ import {
 } from "../shared/pixel-render.js";
 
 const config = {
-  spawnIntervalMs: 6_000,
-  travelDurationSeconds: 52,
-  bootstrapCount: 2,
+  speedPxPerSecond: 28,
+  slotIntervalSeconds: 6,
   completedResumeDelayMs: 5_000,
   ...(/** @type {any} */ (window).__PAINTING_TEST_CONFIG__ ?? {}),
 };
@@ -31,23 +30,28 @@ class PaintingParade extends HTMLElement {
     super();
     this.root = this.attachShadow({ mode: "open" });
     this.state = new ParadeState();
-    /** @type {Map<string, ParadeEntry>} */
-    this.visible = new Map();
+    /** @type {ParadeSlot[]} */
+    this.slots = [];
     /** @type {Map<string, Int32Array>} */
     this.livePixels = new Map();
     /** @type {Map<string, number>} */
     this.liveSequences = new Map();
     /** @type {Map<string, Promise<CanvasReplayResponse>>} */
     this.replayCache = new Map();
+    /** @type {Array<() => Promise<void>>} */
+    this.replayQueue = [];
+    this.replayRequestsInFlight = 0;
     /** @type {HTMLElement} */
     this.stage = /** @type {any} */ (null);
     /** @type {EventSource | null} */
     this.source = null;
-    this.spawnTimer = 0;
+    /** @type {ResizeObserver | null} */
+    this.resizeObserver = null;
+    this.resizeFrame = 0;
     this.drainTimer = 0;
+    this.completedResumeTimer = 0;
     this.fetchingCompleted = false;
     this.hidden = document.visibilityState !== "visible";
-    this.spawnSequence = 0;
     this.liveSynced = false;
     this.hadLive = false;
     this.completedResumeAt = 0;
@@ -57,32 +61,28 @@ class PaintingParade extends HTMLElement {
   connectedCallback() {
     if (this.root.childNodes.length === 0) this.build();
     document.addEventListener("visibilitychange", this.onVisibility);
-    this.bootstrapPlaceholders();
+    this.rebuildSlots();
+    this.resizeObserver = new ResizeObserver(() => this.scheduleSlotRebuild());
+    this.resizeObserver.observe(this);
     this.connect();
     void this.fetchCompletedPage();
     this.drainTimer = setInterval(() => this.drain(), 33);
-    this.scheduleNextSpawn();
   }
 
   disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.onVisibility);
-    clearTimeout(this.spawnTimer);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    cancelAnimationFrame(this.resizeFrame);
     clearInterval(this.drainTimer);
+    clearTimeout(this.completedResumeTimer);
     this.source?.close();
     this.source = null;
-    this.visible.clear();
+    this.releaseSlots();
   }
 
   get mode() {
     return this.getAttribute("mode") === "display" ? "display" : "ambient";
-  }
-
-  get capacity() {
-    const narrow = matchMedia("(max-width: 40rem)").matches;
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      return narrow ? 4 : 8;
-    }
-    return 10;
   }
 
   build() {
@@ -90,7 +90,7 @@ class PaintingParade extends HTMLElement {
     style.textContent = `
       :host { display:block; position:absolute; inset:0; overflow:hidden; pointer-events:none; contain:strict; }
       .stage { position:absolute; inset:0; overflow:hidden; }
-      figure { --size:clamp(7rem,18vw,13rem); position:absolute; z-index:1; right:100%; width:var(--size); margin:0; padding:.5rem; color:#1d1d21; border:.1875rem solid #5d482c; background:#fff8e5; box-shadow:.35rem .35rem 0 rgb(45 32 18 / 28%); animation:travel ${config.travelDurationSeconds}s linear forwards; will-change:transform; }
+      figure { --size:clamp(7rem,18vw,13rem); position:absolute; z-index:1; right:100%; width:var(--size); margin:0; padding:.5rem; color:#1d1d21; border:.1875rem solid #5d482c; background:#fff8e5; box-shadow:.35rem .35rem 0 rgb(45 32 18 / 28%); animation:travel var(--travel-duration,52s) linear infinite; will-change:transform; }
       figure[data-row="top"] { top:18%; }
       figure[data-row="bottom"] { top:66%; }
       canvas { display:block; width:100%; aspect-ratio:1; image-rendering:pixelated; background:#fff9ff; }
@@ -159,7 +159,14 @@ class PaintingParade extends HTMLElement {
         this.livePixels.set(item.canvas.id, decodePixels(item.canvas.pixels));
         this.liveSequences.set(item.canvas.id, item.headSequence);
       }
-      void this.fillPlaceholders();
+      for (const slot of this.slots) {
+        if (
+          slot.kind === "active" && slot.id && !this.state.active.has(slot.id)
+        ) {
+          this.recycleSlot(slot);
+        }
+      }
+      void this.fillSlots();
       return;
     }
     if (message.type === "snapshot") {
@@ -168,13 +175,12 @@ class PaintingParade extends HTMLElement {
       const pixels = decodePixels(message.canvas.pixels);
       this.livePixels.set(message.canvas.id, pixels);
       this.liveSequences.set(message.canvas.id, message.headSequence);
-      const visible = this.visible.get(message.canvas.id);
-      if (visible) {
-        visible.pixels = pixels.slice();
-        visible.replay?.reset();
-        drawPixels(visible.context, visible.pixels);
+      for (const slot of this.assignedSlots(message.canvas.id)) {
+        slot.pixels = pixels.slice();
+        slot.replay?.reset();
+        drawPixels(slot.context, slot.pixels);
       }
-      void this.fillPlaceholders();
+      void this.fillSlots();
       return;
     }
     if (message.type === "diff") {
@@ -188,7 +194,9 @@ class PaintingParade extends HTMLElement {
         }
       }
       this.liveSequences.set(message.canvasId, message.headSequence);
-      this.visible.get(message.canvasId)?.replay?.receive(fresh, Date.now());
+      for (const slot of this.assignedSlots(message.canvasId)) {
+        slot.replay?.receive(fresh, Date.now());
+      }
       return;
     }
     if (message.type === "completed") {
@@ -196,41 +204,342 @@ class PaintingParade extends HTMLElement {
       this.updateLivePriority();
       this.livePixels.delete(message.canvas.id);
       this.liveSequences.delete(message.canvas.id);
-      const visible = this.visible.get(message.canvas.id);
-      if (visible) {
-        visible.state.textContent = "SIGNED";
-        visible.figure.dataset.kind = "completed";
+      for (const slot of this.assignedSlots(message.canvas.id)) {
+        this.recycleSlot(slot);
       }
-      void this.fillPlaceholders();
+      void this.fillSlots();
       return;
     }
     this.state.removeActive(message.canvasId);
     this.updateLivePriority();
     this.livePixels.delete(message.canvasId);
     this.liveSequences.delete(message.canvasId);
-    if (this.state.active.size === 0) {
-      void this.fetchCompletedPage();
-      void this.fillPlaceholders();
+    for (const slot of this.assignedSlots(message.canvasId)) {
+      this.recycleSlot(slot);
     }
+    if (this.state.active.size === 0) void this.fetchCompletedPage();
   }
 
-  bootstrapPlaceholders() {
-    if (this.visible.size > 0) return;
-    const count = Math.min(config.bootstrapCount, this.capacity);
-    for (let index = 0; index < count; index++) {
-      const entry = this.placeholderEntry();
-      this.visible.set(entry.id, entry);
-      this.stage.append(entry.figure);
-      this.seekIntoView(entry, (count - index - 1) * config.spawnIntervalMs);
-    }
+  scheduleSlotRebuild() {
+    cancelAnimationFrame(this.resizeFrame);
+    this.resizeFrame = requestAnimationFrame(() => this.rebuildSlots());
   }
 
-  async fillPlaceholders() {
-    if (!this.liveSynced) return;
-    const placeholders = [...this.visible.values()].filter((entry) =>
-      entry.kind === "placeholder" && !entry.hydrating
+  rebuildSlots() {
+    this.releaseSlots();
+    this.stage.replaceChildren();
+    const probe = this.createSlot(0);
+    this.stage.append(probe.figure);
+    const cardWidth = probe.figure.getBoundingClientRect().width;
+    probe.figure.remove();
+    const stageWidth = this.stage.getBoundingClientRect().width || innerWidth;
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const narrow = matchMedia("(max-width: 40rem)").matches;
+    const distance = stageWidth + cardWidth * 1.7;
+    const durationSeconds = reduced ? 0 : distance / config.speedPxPerSecond;
+    let slotCount = reduced ? narrow ? 4 : 8 : Math.max(
+      2,
+      Math.min(64, Math.ceil(durationSeconds / config.slotIntervalSeconds)),
     );
-    await Promise.all(placeholders.map(() => this.spawnNext()));
+    if (slotCount % 2 !== 0) slotCount++;
+    const slotIntervalSeconds = reduced ? 0 : durationSeconds / slotCount;
+    this.dataset.slotCount = String(slotCount);
+    this.dataset.travelDuration = String(durationSeconds);
+    this.dataset.slotInterval = String(slotIntervalSeconds);
+    for (let index = 0; index < slotCount; index++) {
+      const slot = this.createSlot(index);
+      const phase = reduced ? 0 : (slotCount - index - 1) * slotIntervalSeconds;
+      slot.figure.dataset.phaseSeconds = String(phase);
+      slot.figure.style.setProperty("--travel-duration", `${durationSeconds}s`);
+      slot.figure.style.animationDelay = reduced ? "0s" : `${-phase}s`;
+      this.slots.push(slot);
+      this.stage.append(slot.figure);
+    }
+    void this.fillSlots();
+  }
+
+  releaseSlots() {
+    for (const slot of this.slots) {
+      slot.assignment++;
+      if (slot.pendingCandidate) this.releaseCandidate(slot.pendingCandidate);
+      else if (slot.id && slot.kind !== "placeholder") {
+        const canvas = slot.kind === "active"
+          ? this.state.active.get(slot.id)
+          : this.state.completed.get(slot.id);
+        if (canvas) this.releaseCandidate({ canvas, kind: slot.kind });
+      }
+    }
+    this.slots = [];
+  }
+
+  /** @param {number} index @returns {ParadeSlot} */
+  createSlot(index) {
+    const figure = document.createElement("figure");
+    const row = index % 2 === 0 ? "top" : "bottom";
+    const narrow = matchMedia("(max-width: 40rem)").matches;
+    const columns = narrow ? 2 : 4;
+    const column = Math.floor(index / 2) % columns;
+    figure.dataset.slotIndex = String(index);
+    figure.dataset.canvasId = "";
+    figure.dataset.kind = "placeholder";
+    figure.dataset.row = row;
+    figure.style.setProperty(
+      "--still-x",
+      `${columns === 2 ? 5 + column * 50 : 4 + column * 24}%`,
+    );
+    const canvas = document.createElement("canvas");
+    const context = paintingContext(canvas);
+    const title = document.createElement("span");
+    title.className = "title";
+    const state = document.createElement("span");
+    const caption = document.createElement("figcaption");
+    caption.append(title, state);
+    figure.append(canvas, caption);
+    const slot = /** @type {ParadeSlot} */ ({
+      index,
+      id: null,
+      kind: "placeholder",
+      figure,
+      context,
+      title,
+      state,
+      pixels: createPixels(),
+      replay: null,
+      timeline: null,
+      nextStep: 0,
+      animation: null,
+      playbackStartedAt: 0,
+      playbackDurationMs: 0,
+      assignment: 0,
+      hydrating: false,
+      pendingCandidate: null,
+    });
+    this.showPlaceholder(slot);
+    figure.addEventListener("animationiteration", () => this.recycleSlot(slot));
+    return slot;
+  }
+
+  /** @param {ParadeSlot} slot */
+  recycleSlot(slot) {
+    if (!this.slots.includes(slot)) return;
+    if (slot.hydrating) return;
+    slot.assignment++;
+    if (slot.pendingCandidate) this.releaseCandidate(slot.pendingCandidate);
+    this.showPlaceholder(slot);
+    void this.populateSlot(slot);
+  }
+
+  async fillSlots() {
+    if (!this.liveSynced) return;
+    await Promise.all(
+      this.slots.filter((slot) =>
+        slot.kind === "placeholder" && !slot.hydrating
+      ).map((slot) => this.populateSlot(slot)),
+    );
+  }
+
+  /** @param {ParadeSlot} slot */
+  async populateSlot(slot) {
+    if (
+      !this.liveSynced || slot.hydrating ||
+      (this.state.active.size === 0 && Date.now() < this.completedResumeAt)
+    ) return;
+    if (this.state.needsCompletedPage()) void this.fetchCompletedPage();
+    const visibleIds = new Set(
+      this.slots.flatMap((entry) => {
+        const id = entry.id ?? entry.pendingCandidate?.canvas.id;
+        return id ? [id] : [];
+      }),
+    );
+    const candidate = /** @type {ParadeCandidate | null} */ (
+      this.state.next(visibleIds)
+    );
+    if (!candidate) return;
+    const assignment = ++slot.assignment;
+    slot.hydrating = true;
+    slot.pendingCandidate = candidate;
+    try {
+      if (candidate.kind === "active") {
+        if (slot.assignment !== assignment) return;
+        this.showActive(slot, candidate.canvas);
+      } else {
+        const timeline = await this.completedReplay(candidate.canvas.id);
+        if (slot.assignment !== assignment) return;
+        if (this.state.active.size > 0) {
+          this.releaseCandidate(candidate);
+          this.showPlaceholder(slot);
+          return;
+        }
+        this.showCompleted(slot, candidate.canvas, timeline);
+      }
+      slot.pendingCandidate = null;
+      this.recordAssignment(slot);
+    } catch (error) {
+      if (slot.assignment === assignment) {
+        this.releaseCandidate(candidate);
+        this.showPlaceholder(slot);
+        this.dispatchEvent(new CustomEvent("parade-error", { detail: error }));
+      }
+    } finally {
+      if (slot.assignment === assignment) {
+        slot.hydrating = false;
+        slot.pendingCandidate = null;
+      }
+    }
+  }
+
+  /** @param {ParadeCandidate} candidate */
+  releaseCandidate(candidate) {
+    const id = candidate.canvas.id;
+    if (candidate.kind === "active") {
+      if (this.state.active.has(id) && !this.state.activeRound.includes(id)) {
+        this.state.activeRound.unshift(id);
+      }
+      return;
+    }
+    if (
+      this.state.completed.has(id) &&
+      !this.state.signedFirst.includes(id) &&
+      !this.state.unseenCompleted.includes(id) &&
+      !this.state.repeatBag.includes(id)
+    ) this.state.unseenCompleted.unshift(id);
+  }
+
+  /** @param {ParadeSlot} slot */
+  showPlaceholder(slot) {
+    slot.id = null;
+    slot.kind = "placeholder";
+    slot.hydrating = false;
+    slot.pendingCandidate = null;
+    slot.figure.dataset.canvasId = "";
+    slot.figure.dataset.kind = "placeholder";
+    slot.title.textContent = "Loading painting";
+    slot.state.className = "loading";
+    slot.state.textContent = "LOADING";
+    slot.pixels = createPixels();
+    slot.replay = null;
+    slot.timeline = null;
+    slot.nextStep = 0;
+    drawPixels(slot.context, slot.pixels);
+  }
+
+  /** @param {ParadeSlot} slot @param {PublicCanvas} canvas */
+  showActive(slot, canvas) {
+    slot.id = canvas.id;
+    slot.kind = "active";
+    slot.figure.dataset.canvasId = canvas.id;
+    slot.figure.dataset.kind = "active";
+    slot.title.textContent = canvas.title || "Painting now";
+    slot.state.className = "live";
+    slot.state.textContent = "LIVE";
+    slot.pixels =
+      (this.livePixels.get(canvas.id) ?? decodePixels(canvas.pixels)).slice();
+    slot.replay = new LiveReplay({ lagMs: 500, catchUpThresholdMs: 2_000 });
+    slot.timeline = null;
+    slot.nextStep = 0;
+    drawPixels(slot.context, slot.pixels);
+  }
+
+  /** @param {ParadeSlot} slot @param {PublicCanvas} canvas @param {CanvasReplayResponse} timeline */
+  showCompleted(slot, canvas, timeline) {
+    slot.id = canvas.id;
+    slot.kind = "completed";
+    slot.figure.dataset.canvasId = canvas.id;
+    slot.figure.dataset.kind = "completed";
+    slot.title.textContent = canvas.title || "Untitled";
+    slot.state.className = "replay";
+    slot.state.textContent = "REPLAY";
+    slot.pixels = decodePixels(timeline.initialPixels);
+    slot.replay = null;
+    slot.timeline = timeline;
+    slot.nextStep = 0;
+    drawPixels(slot.context, slot.pixels);
+    this.startCompletedPlayback(slot);
+  }
+
+  /** @param {string} canvasId */
+  async completedReplay(canvasId) {
+    let replay = this.replayCache.get(canvasId);
+    if (!replay) {
+      replay = this.queueReplayRequest(async () => {
+        const response = await fetch(`/canvases/${canvasId}/replay?v=5`);
+        if (!response.ok) throw new Error(`replay failed: ${response.status}`);
+        return await response.json();
+      });
+      this.replayCache.set(canvasId, replay);
+      void replay.catch(() => {
+        if (this.replayCache.get(canvasId) === replay) {
+          this.replayCache.delete(canvasId);
+        }
+      });
+    }
+    return await replay;
+  }
+
+  /** @template T @param {() => Promise<T>} request @returns {Promise<T>} */
+  queueReplayRequest(request) {
+    return new Promise((resolve, reject) => {
+      this.replayQueue.push(async () => {
+        try {
+          resolve(await request());
+        } catch (error) {
+          reject(error);
+        }
+      });
+      this.drainReplayQueue();
+    });
+  }
+
+  drainReplayQueue() {
+    while (this.replayRequestsInFlight < 2 && this.replayQueue.length > 0) {
+      const request = this.replayQueue.shift();
+      if (!request) return;
+      this.replayRequestsInFlight++;
+      void request().finally(() => {
+        this.replayRequestsInFlight--;
+        this.drainReplayQueue();
+      });
+    }
+  }
+
+  /** @param {ParadeSlot} slot */
+  startCompletedPlayback(slot) {
+    slot.animation = slot.figure.getAnimations()[0] ?? null;
+    const duration = Number(
+      slot.animation?.effect?.getComputedTiming().duration ?? 0,
+    );
+    const currentTime = Number(slot.animation?.currentTime ?? 0);
+    const phase = duration > 0 ? currentTime % duration : 0;
+    slot.playbackStartedAt = currentTime - phase;
+    slot.playbackDurationMs = Math.max(1, duration * .68);
+  }
+
+  /** @param {string} canvasId */
+  assignedSlots(canvasId) {
+    return this.slots.filter((slot) => slot.id === canvasId);
+  }
+
+  /** @param {ParadeSlot} slot */
+  recordAssignment(slot) {
+    this.dispatchEvent(
+      new CustomEvent("parade-spawn", {
+        detail: {
+          id: slot.id,
+          kind: slot.kind,
+          row: slot.figure.dataset.row,
+          slot: slot.index,
+        },
+      }),
+    );
+    const diagnostics = /** @type {any} */ (window);
+    diagnostics.__PAINTING_PARADE_EVENTS__ ??= [];
+    diagnostics.__PAINTING_PARADE_EVENTS__.push({
+      id: slot.id,
+      kind: slot.kind,
+      row: slot.figure.dataset.row,
+      slot: slot.index,
+      at: performance.now(),
+    });
   }
 
   async fetchCompletedPage() {
@@ -246,8 +555,7 @@ class PaintingParade extends HTMLElement {
       }
       const page = /** @type {CompletedFeedResponse} */ (await response.json());
       this.state.addCompletedPage(page.paintings, page.nextCursor);
-      if (!this.liveSynced) return;
-      void this.fillPlaceholders();
+      if (this.liveSynced) void this.fillSlots();
     } catch (error) {
       this.dispatchEvent(new CustomEvent("parade-error", { detail: error }));
     } finally {
@@ -255,281 +563,57 @@ class PaintingParade extends HTMLElement {
     }
   }
 
-  async spawnNext() {
-    if (this.hidden) return;
-    const placeholder = [...this.visible.values()].find((entry) =>
-      entry.kind === "placeholder" && !entry.hydrating
-    );
-    if (!this.liveSynced) {
-      if (this.visible.size < this.capacity) this.appendPlaceholder();
-      return;
-    }
-    if (!placeholder && this.visible.size >= this.capacity) return;
-    if (
-      this.state.active.size === 0 && Date.now() < this.completedResumeAt
-    ) {
-      return;
-    }
-    if (this.state.needsCompletedPage()) void this.fetchCompletedPage();
-    const candidate = this.state.next(new Set(this.visible.keys()));
-    if (!candidate) {
-      if (!placeholder && this.visible.size < this.capacity) {
-        this.appendPlaceholder();
-      }
-      return;
-    }
-    if (placeholder) placeholder.hydrating = true;
-    try {
-      const layout = placeholder
-        ? { sequence: Number(placeholder.figure.dataset.sequence) }
-        : undefined;
-      const entry = candidate.kind === "active"
-        ? this.activeEntry(candidate.canvas, layout)
-        : await this.completedEntry(candidate.canvas, layout);
-      if (candidate.kind === "completed" && this.state.active.size > 0) {
-        this.state.signedFirst.unshift(candidate.canvas.id);
-        if (placeholder) placeholder.hydrating = false;
-        return;
-      }
-      if (placeholder && this.visible.has(placeholder.id)) {
-        this.replacePlaceholder(placeholder, entry);
-      } else {
-        this.visible.set(candidate.canvas.id, entry);
-        this.stage.append(entry.figure);
-      }
-      if (entry.kind === "completed") this.startCompletedPlayback(entry);
-      this.dispatchEvent(
-        new CustomEvent("parade-spawn", {
-          detail: {
-            id: entry.id,
-            kind: entry.kind,
-            row: entry.figure.dataset.row,
-          },
-        }),
-      );
-      const diagnostics = /** @type {any} */ (window);
-      diagnostics.__PAINTING_PARADE_EVENTS__ ??= [];
-      diagnostics.__PAINTING_PARADE_EVENTS__.push({
-        id: entry.id,
-        kind: entry.kind,
-        row: entry.figure.dataset.row,
-        at: performance.now(),
-      });
-    } catch (error) {
-      if (placeholder) placeholder.hydrating = false;
-      this.dispatchEvent(new CustomEvent("parade-error", { detail: error }));
-    }
-  }
-
-  appendPlaceholder() {
-    const entry = this.placeholderEntry();
-    this.visible.set(entry.id, entry);
-    this.stage.append(entry.figure);
-  }
-
-  /** @param {number} [delay] */
-  scheduleNextSpawn(delay = config.spawnIntervalMs) {
-    clearTimeout(this.spawnTimer);
-    this.spawnTimer = setTimeout(async () => {
-      await this.spawnNext();
-      this.scheduleNextSpawn();
-    }, delay);
-  }
-
-  /** @param {PublicCanvas} canvas @param {"active" | "completed" | "placeholder"} kind @param {Int32Array} pixels @param {EntryLayout} [layout] */
-  baseEntry(canvas, kind, pixels, layout) {
-    const figure = document.createElement("figure");
-    const sequence = layout?.sequence ?? this.spawnSequence++;
-    const row = sequence % 2 === 0 ? "top" : "bottom";
-    const narrow = matchMedia("(max-width: 40rem)").matches;
-    const columns = narrow ? 2 : 4;
-    const column = Math.floor(sequence / 2) % columns;
-    figure.dataset.canvasId = canvas.id;
-    figure.dataset.kind = kind;
-    figure.dataset.row = row;
-    figure.dataset.sequence = String(sequence);
-    figure.style.setProperty(
-      "--still-x",
-      `${columns === 2 ? 5 + column * 50 : 4 + column * 24}%`,
-    );
-    const canvasElement = document.createElement("canvas");
-    const context = paintingContext(canvasElement);
-    drawPixels(context, pixels);
-    const caption = document.createElement("figcaption");
-    const title = document.createElement("span");
-    title.className = "title";
-    title.textContent = kind === "placeholder"
-      ? "Loading painting"
-      : canvas.title || (kind === "active" ? "Painting now" : "Untitled");
-    const state = document.createElement("span");
-    state.className = kind === "active"
-      ? "live"
-      : kind === "placeholder"
-      ? "loading"
-      : "replay";
-    state.textContent = kind === "active"
-      ? "LIVE"
-      : kind === "placeholder"
-      ? "LOADING"
-      : "REPLAY";
-    caption.append(title, state);
-    figure.append(canvasElement, caption);
-    const entry = /** @type {ParadeEntry} */ ({
-      id: canvas.id,
-      kind,
-      figure,
-      context,
-      pixels,
-      state,
-      replay: null,
-      timeline: null,
-      nextStep: 0,
-      animation: null,
-      playbackStartedAt: 0,
-      playbackDurationMs: 0,
-      hydrating: false,
-    });
-    figure.addEventListener("animationend", () => this.retire(entry), {
-      once: true,
-    });
-    return entry;
-  }
-
-  placeholderEntry() {
-    const sequence = this.spawnSequence;
-    return this.baseEntry(
-      {
-        id: `loading-${sequence}`,
-        title: null,
-        pixels: "",
-        createdAt: 0,
-        lastStrokeAt: null,
-        completedAt: null,
-      },
-      "placeholder",
-      createPixels(),
-    );
-  }
-
-  /** @param {PublicCanvas} canvas @param {EntryLayout} [layout] */
-  activeEntry(canvas, layout) {
-    const pixels =
-      (this.livePixels.get(canvas.id) ?? decodePixels(canvas.pixels)).slice();
-    const entry = this.baseEntry(canvas, "active", pixels, layout);
-    entry.replay = new LiveReplay({ lagMs: 500, catchUpThresholdMs: 2_000 });
-    return entry;
-  }
-
-  /** @param {PublicCanvas} canvas @param {EntryLayout} [layout] */
-  async completedEntry(canvas, layout) {
-    let replay = this.replayCache.get(canvas.id);
-    if (!replay) {
-      replay = fetch(`/canvases/${canvas.id}/replay?v=5`).then((response) => {
-        if (!response.ok) throw new Error(`replay failed: ${response.status}`);
-        return response.json();
-      });
-      this.replayCache.set(canvas.id, replay);
-    }
-    const timeline = await replay;
-    const entry = this.baseEntry(
-      canvas,
-      "completed",
-      decodePixels(timeline.initialPixels),
-      layout,
-    );
-    entry.timeline = timeline;
-    return entry;
-  }
-
-  /** @param {ParadeEntry} placeholder @param {ParadeEntry} entry */
-  replacePlaceholder(placeholder, entry) {
-    const currentTime = placeholder.figure.getAnimations()[0]?.currentTime;
-    placeholder.figure.replaceWith(entry.figure);
-    if (currentTime !== null && currentTime !== undefined) {
-      const animation = entry.figure.getAnimations()[0];
-      if (animation) animation.currentTime = currentTime;
-    }
-    this.visible.delete(placeholder.id);
-    this.visible.set(entry.id, entry);
-  }
-
-  /** @param {ParadeEntry} entry @param {number} [advanceMs] */
-  seekIntoView(entry, advanceMs = 0) {
-    const animation = entry.figure.getAnimations()[0];
-    if (!animation) return;
-    const duration = Number(animation.effect?.getComputedTiming().duration);
-    const width = entry.figure.getBoundingClientRect().width;
-    const distance = this.stage.getBoundingClientRect().width + width * 1.7;
-    if (duration > 0 && distance > 0) {
-      animation.currentTime = Math.min(
-        duration - 1,
-        duration * width * 1.08 / distance + advanceMs,
-      );
-    }
-  }
-
-  /** @param {ParadeEntry} entry */
-  startCompletedPlayback(entry) {
-    entry.animation = entry.figure.getAnimations()[0] ?? null;
-    const duration = Number(
-      entry.animation?.effect?.getComputedTiming().duration ?? 0,
-    );
-    entry.playbackStartedAt = Number(entry.animation?.currentTime ?? 0);
-    entry.playbackDurationMs = Math.max(1, duration * .68);
-  }
-
   drain() {
     if (this.hidden) return;
-    for (const entry of this.visible.values()) {
-      if (entry.kind === "active") {
+    for (const slot of this.slots) {
+      if (slot.kind === "active") {
         let changed = false;
-        for (const batch of entry.replay?.drain(Date.now()) ?? []) {
-          for (const [index, color] of batch.cells) entry.pixels[index] = color;
+        for (const batch of slot.replay?.drain(Date.now()) ?? []) {
+          for (const [index, color] of batch.cells) slot.pixels[index] = color;
           changed = true;
         }
-        if (changed) drawPixels(entry.context, entry.pixels);
+        if (changed) drawPixels(slot.context, slot.pixels);
         continue;
       }
-      if (!entry.timeline) continue;
+      if (slot.kind !== "completed" || !slot.timeline) continue;
       const animationTime = Number(
-        entry.animation?.currentTime ?? entry.playbackStartedAt,
+        slot.animation?.currentTime ?? slot.playbackStartedAt,
       );
-      const elapsed = Math.max(0, animationTime - entry.playbackStartedAt) *
-        entry.timeline.durationMs / entry.playbackDurationMs;
+      const elapsed = Math.max(0, animationTime - slot.playbackStartedAt) *
+        slot.timeline.durationMs / slot.playbackDurationMs;
       let changed = false;
       while (
-        entry.nextStep < entry.timeline.steps.length &&
-        entry.timeline.steps[entry.nextStep].atMs <= elapsed
+        slot.nextStep < slot.timeline.steps.length &&
+        slot.timeline.steps[slot.nextStep].atMs <= elapsed
       ) {
-        const step = entry.timeline.steps[entry.nextStep++];
-        if (step.type === "snapshot") entry.pixels = decodePixels(step.pixels);
-        else applyEncodedCells(entry.pixels, step.cells);
+        const step = slot.timeline.steps[slot.nextStep++];
+        if (step.type === "snapshot") slot.pixels = decodePixels(step.pixels);
+        else applyEncodedCells(slot.pixels, step.cells);
         changed = true;
       }
-      if (changed) drawPixels(entry.context, entry.pixels);
+      if (changed) drawPixels(slot.context, slot.pixels);
       if (
-        elapsed >= entry.timeline.durationMs &&
-        entry.state.textContent !== "SIGNED"
+        elapsed >= slot.timeline.durationMs &&
+        slot.state.textContent !== "SIGNED"
       ) {
-        entry.pixels = decodePixels(entry.timeline.finalPixels);
-        drawPixels(entry.context, entry.pixels);
-        entry.state.textContent = "SIGNED";
+        slot.pixels = decodePixels(slot.timeline.finalPixels);
+        drawPixels(slot.context, slot.pixels);
+        slot.state.textContent = "SIGNED";
       }
     }
-  }
-
-  /** @param {ParadeEntry} entry */
-  retire(entry) {
-    entry.figure.remove();
-    this.visible.delete(entry.id);
   }
 
   updateLivePriority() {
+    clearTimeout(this.completedResumeTimer);
     if (this.state.active.size > 0) {
       this.hadLive = true;
       this.completedResumeAt = Number.POSITIVE_INFINITY;
     } else if (this.hadLive) {
       this.completedResumeAt = Date.now() + config.completedResumeDelayMs;
+      this.completedResumeTimer = setTimeout(
+        () => void this.fillSlots(),
+        config.completedResumeDelayMs,
+      );
     }
   }
 
@@ -542,7 +626,6 @@ class PaintingParade extends HTMLElement {
       return;
     }
     this.connect();
-    this.scheduleNextSpawn();
   }
 }
 

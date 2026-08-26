@@ -66,10 +66,9 @@ try {
     await context.addInitScript(() => {
       // @ts-ignore test-only timing seam read before the module evaluates
       window.__PAINTING_TEST_CONFIG__ = {
-        spawnIntervalMs: 100,
-        travelDurationSeconds: 2,
-        bootstrapCount: 2,
-        completedResumeDelayMs: 1_500,
+        speedPxPerSecond: 900,
+        slotIntervalSeconds: .25,
+        completedResumeDelayMs: 300,
       };
     });
   }
@@ -85,6 +84,7 @@ try {
     { name: "display-mobile", page: await mobile.newPage(), path: "/display" },
   ];
   const requests = new Map<Page, string[]>();
+  const trackCounts = new Map<Page, number>();
   for (const testCase of cases) {
     console.log(`Opening ${testCase.name}...`);
     requests.set(testCase.page, []);
@@ -109,58 +109,104 @@ try {
       waitUntil: "domcontentloaded",
     });
     await testCase.page.waitForFunction(() =>
-      (document.querySelector("painting-parade")?.shadowRoot?.querySelectorAll(
-        'figure[data-kind="placeholder"]',
-      ).length ?? 0) >= 3
+      Number(
+        (document.querySelector("painting-parade") as HTMLElement)?.dataset
+          .slotCount,
+      ) >= 2
     );
-    const initialFlow = await testCase.page.evaluate(() =>
-      [
-        ...document.querySelector("painting-parade")!.shadowRoot!
-          .querySelectorAll("figure"),
-      ].slice(0, 3).map((figure) => ({
-        kind: /** @type {HTMLElement} */ (figure).dataset.kind,
-        row: /** @type {HTMLElement} */ (figure).dataset.row,
-        left: figure.getBoundingClientRect().left,
-      }))
-    );
+    await testCase.page.evaluate(() => {
+      const diagnostics = window as any;
+      diagnostics.__PAINTING_PARADE_ERRORS__ = [];
+      document.querySelector("painting-parade")!.addEventListener(
+        "parade-error",
+        (event) =>
+          diagnostics.__PAINTING_PARADE_ERRORS__.push(
+            String((event as CustomEvent).detail),
+          ),
+      );
+    });
+    const initialTrack = await inspectTrack(testCase.page);
+    trackCounts.set(testCase.page, initialTrack.count);
+    assertEquals(initialTrack.count, initialTrack.figures.length);
     assertEquals(
-      initialFlow.map((entry) => entry.kind),
-      ["placeholder", "placeholder", "placeholder"],
-    );
-    assertEquals(
-      initialFlow.map((entry) => entry.row),
-      ["top", "bottom", "top"],
+      initialTrack.figures.map((entry) => entry.index),
+      Array.from({ length: initialTrack.count }, (_, index) => index),
     );
     assert(
-      initialFlow[0].left > initialFlow[1].left + 10,
-      `${testCase.name}: first two loading cards should be time-staggered`,
+      initialTrack.figures.every((entry) => entry.kind === "placeholder"),
+      `${testCase.name}: every permanent slot should begin as a placeholder`,
     );
+    assertEquals(
+      initialTrack.figures.map((entry) => entry.row),
+      Array.from(
+        { length: initialTrack.count },
+        (_, index) => index % 2 === 0 ? "top" : "bottom",
+      ),
+    );
+    for (let index = 1; index < initialTrack.figures.length; index++) {
+      assert(
+        Math.abs(
+          initialTrack.figures[index - 1].phase -
+            initialTrack.figures[index].phase - initialTrack.interval,
+        ) < 1e-9,
+        `${testCase.name}: adjacent slots should have equal phases`,
+      );
+    }
+    assert(
+      Math.abs(
+        initialTrack.duration - initialTrack.figures[0].phase -
+          initialTrack.interval,
+      ) < 1e-9,
+      `${testCase.name}: the loop seam should have the same spacing`,
+    );
+    assertEquals(initialTrack.count % 2, 0);
+    assert(
+      initialTrack.interval <= .25,
+      `${testCase.name}: responsive spacing must not exceed its target`,
+    );
+    assert(
+      Math.abs(initialTrack.calculatedSpeed - 900) < 1,
+      `${testCase.name}: track should preserve configured pixel speed`,
+    );
+    await testCase.page.evaluate(() => {
+      const figures = [
+        ...document.querySelector("painting-parade")!.shadowRoot!
+          .querySelectorAll("figure"),
+      ];
+      // @ts-ignore test diagnostic
+      window.__PAINTING_SLOT_NODES__ = figures;
+    });
     await testCase.page.screenshot({
       path: new URL(`${testCase.name}-loading.png`, artifactDir).pathname,
       fullPage: true,
     });
     await testCase.page.waitForFunction(
-      () =>
-        (document.querySelector("painting-parade")?.shadowRoot
-          ?.querySelectorAll(
-            'figure:not([data-kind="placeholder"])',
-          ).length ?? 0) >= 2,
+      () => {
+        const parade = document.querySelector("painting-parade")!;
+        const figures = [...parade.shadowRoot!.querySelectorAll("figure")];
+        return figures.length > 0 &&
+          figures.every((figure) =>
+            /** @type {HTMLElement} */ (figure).dataset.kind === "active"
+          );
+      },
       undefined,
       { timeout: 60_000 },
     );
-    const bootstrapInside = await testCase.page.evaluate(() => {
-      const parade = document.querySelector("painting-parade")!;
-      const figures = [
-        ...parade.shadowRoot!.querySelectorAll("figure"),
-      ];
-      return figures.slice(0, 2).every((figure) => {
-        const bounds = figure.getBoundingClientRect();
-        return bounds.left >= -1 && bounds.right <= innerWidth + 1;
-      });
-    });
     assert(
-      bootstrapInside,
-      `${testCase.name}: bootstrap cards should begin fully in view`,
+      await testCase.page.evaluate(() => {
+        const figures = [
+          ...document.querySelector("painting-parade")!.shadowRoot!
+            .querySelectorAll("figure"),
+        ];
+        // @ts-ignore test diagnostic
+        const diagnostics = window as any;
+        return figures.length === diagnostics.__PAINTING_SLOT_NODES__.length &&
+          // @ts-ignore test diagnostic
+          figures.every((figure, index) =>
+            figure === diagnostics.__PAINTING_SLOT_NODES__[index]
+          );
+      }),
+      `${testCase.name}: hydration should preserve every slot element`,
     );
     await testCase.page.screenshot({
       path: new URL(`${testCase.name}-live.png`, artifactDir).pathname,
@@ -235,7 +281,49 @@ try {
       ).size
     );
     assertEquals(rows, 2);
+    assert(
+      await testCase.page.evaluate(() => {
+        const figures = [
+          ...document.querySelector("painting-parade")!.shadowRoot!
+            .querySelectorAll("figure"),
+        ];
+        // @ts-ignore test diagnostic
+        const diagnostics = window as any;
+        return figures.length === diagnostics.__PAINTING_SLOT_NODES__.length &&
+          // @ts-ignore test diagnostic
+          figures.every((figure, index) =>
+            figure === diagnostics.__PAINTING_SLOT_NODES__[index]
+          );
+      }),
+      `${testCase.name}: loops should recycle content without replacing slots`,
+    );
   }
+
+  assert(
+    trackCounts.get(cases[0].page)! > trackCounts.get(cases[2].page)!,
+    "desktop should allocate more permanent slots than mobile",
+  );
+  const resizePage = cases[3].page;
+  const slotsBeforeResize = trackCounts.get(resizePage)!;
+  await resizePage.setViewportSize({ width: 1_000, height: 932 });
+  await resizePage.waitForFunction(
+    (before) =>
+      Number(
+        (document.querySelector("painting-parade") as HTMLElement)?.dataset
+          .slotCount,
+      ) > before,
+    slotsBeforeResize,
+  );
+  const resizedTrack = await inspectTrack(resizePage);
+  assert(resizedTrack.count > slotsBeforeResize);
+  assert(Math.abs(resizedTrack.calculatedSpeed - 900) < 1);
+  assertEquals(
+    resizedTrack.figures.map((entry) => entry.row),
+    Array.from(
+      { length: resizedTrack.count },
+      (_, index) => index % 2 === 0 ? "top" : "bottom",
+    ),
+  );
 
   const beforeSequence = await sequenceTotal(cases[0].page);
   await cases[0].page.waitForTimeout(1_000);
@@ -272,6 +360,13 @@ try {
   const kindsWithLiveRemaining = await spawnedKinds(cases[0].page);
   assertEquals(kindsWithLiveRemaining.at(-1), "active");
 
+  for (const testCase of cases.slice(1)) {
+    await testCase.page.evaluate(() => {
+      const parade = document.querySelector("painting-parade") as any;
+      parade.source?.close();
+    });
+  }
+  await cases[0].page.waitForTimeout(300);
   simulator.stop();
   const reconnectCanvasId = simulator.canvasIds[1];
   const sequenceBeforeDisconnect = await cases[0].page.evaluate(
@@ -348,15 +443,39 @@ try {
   });
   assert(signedResponse.ok, "test server should sign every simulated canvas");
   assertEquals((await signedResponse.json()).signed, 24);
-  await cases[0].page.waitForFunction(
-    () =>
-      // @ts-ignore test diagnostic
-      window.__PAINTING_PARADE_EVENTS__?.some((event) =>
-        event.kind === "completed"
-      ),
-    undefined,
-    { timeout: 20_000 },
-  );
+  try {
+    await cases[0].page.waitForFunction(
+      () =>
+        // @ts-ignore test diagnostic
+        window.__PAINTING_PARADE_EVENTS__?.some((event) =>
+          event.kind === "completed"
+        ),
+      undefined,
+      { timeout: 20_000 },
+    );
+  } catch (error) {
+    const diagnostics = await cases[0].page.evaluate(() => {
+      const parade = document.querySelector("painting-parade")! as any;
+      const browser = window as any;
+      return {
+        active: parade.state.active.size,
+        signedFirst: parade.state.signedFirst.length,
+        resumeAt: parade.completedResumeAt,
+        now: Date.now(),
+        slots: parade.slots.map((slot: any) => ({
+          id: slot.id,
+          kind: slot.kind,
+          hydrating: slot.hydrating,
+          pending: slot.pendingCandidate?.canvas.id ?? null,
+        })),
+        errors: browser.__PAINTING_PARADE_ERRORS__,
+      };
+    });
+    throw new Error(
+      `completed carousel did not resume: ${JSON.stringify(diagnostics)}`,
+      { cause: error },
+    );
+  }
   const firstCompleted = (await spawnedEvents(cases[0].page)).find((event) =>
     event.kind === "completed"
   );
@@ -427,6 +546,41 @@ async function waitForActiveCanvases(expected: number): Promise<void> {
   throw new Error(
     `ephemeral database never exposed ${expected} active canvases`,
   );
+}
+
+async function inspectTrack(page: Page): Promise<{
+  count: number;
+  duration: number;
+  interval: number;
+  calculatedSpeed: number;
+  figures: Array<{
+    index: number;
+    row: string;
+    kind: string;
+    phase: number;
+  }>;
+}> {
+  return await page.evaluate(() => {
+    const parade = document.querySelector("painting-parade")! as HTMLElement;
+    const figures = [
+      ...parade.shadowRoot!.querySelectorAll<HTMLElement>("figure"),
+    ];
+    const duration = Number(parade.dataset.travelDuration);
+    const stageWidth = parade.getBoundingClientRect().width;
+    const cardWidth = figures[0]?.getBoundingClientRect().width ?? 0;
+    return {
+      count: Number(parade.dataset.slotCount),
+      duration,
+      interval: Number(parade.dataset.slotInterval),
+      calculatedSpeed: (stageWidth + cardWidth * 1.7) / duration,
+      figures: figures.map((figure) => ({
+        index: Number(figure.dataset.slotIndex),
+        row: figure.dataset.row ?? "",
+        kind: figure.dataset.kind ?? "",
+        phase: Number(figure.dataset.phaseSeconds),
+      })),
+    };
+  });
 }
 
 async function sequenceTotal(page: Page): Promise<number> {
