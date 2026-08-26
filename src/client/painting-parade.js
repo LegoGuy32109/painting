@@ -87,6 +87,10 @@ class PaintingParade extends HTMLElement {
       :host([mode="display"]) figure[data-row="bottom"] { top:59%; }
       :host([paused]) figure { animation-play-state:paused; }
       @keyframes travel { from { transform:translate3d(0,0,0); } to { transform:translate3d(calc(100vw + 170%),0,0); } }
+      @media (max-width:34rem) {
+        :host([mode="ambient"]) figure[data-row="top"] { top:18%; }
+        :host([mode="ambient"]) figure[data-row="bottom"] { top:calc(18% + clamp(9rem,30vw,11rem)); }
+      }
       @media (prefers-reduced-motion:reduce) { figure { right:auto; left:var(--still-x); animation:none; } }
     `;
     const stage = document.createElement("div");

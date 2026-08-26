@@ -7,9 +7,9 @@
     <title>Paint · Joy of Painting</title>
     <link rel="stylesheet" href="/base.css">
     <link rel="stylesheet" href="/style.css">
-    <script type="module" src="/site-nav.js?v=3"></script>
+    <script type="module" src="/site-nav.js?v=6"></script>
     <script type="module" src="/datastar.js"></script>
-    <script type="module" src="/app.js?v=4"></script>
+    <script type="module" src="/app.js?v=6"></script>
   </head>
   <body>
     <site-nav></site-nav>
@@ -67,7 +67,8 @@
           </div>
         </section>
 
-        <section class="interface" aria-label="Painting controls">
+        <section class="interface" aria-label="Painting controls"
+          data-style:background-color="$paint.selection.color || '#48484c'">
           <div class="tool-row tool-row--paint-settings"
             aria-label="Brush and opacity controls">
             <button
@@ -120,50 +121,35 @@
             >100</button>
           </div>
 
-          <div class="tool-row tool-row--history" aria-label="Canvas controls">
+          <div class="tool-row tool-row--canvas-actions"
+            aria-label="Canvas history and erase controls">
             <button
               type="button"
-              class="action-wide"
               disabled
               data-attr:disabled="$paint.canUndo ? null : true"
               data-on:click="$paint.undoRequest++"
             >Undo</button>
             <button
               type="button"
-              class="action-wide"
+              data-attr:aria-pressed="$paint.erase ? 'true' : 'false'"
               data-on:click="$paint.erase = !$paint.erase"
               data-text="'Erase: ' + ($paint.erase ? 'on' : 'off')"
             >Erase: off</button>
+          </div>
+
+          <div class="tool-row tool-row--paint-actions"
+            aria-label="Color utility controls">
             <button
               type="button"
-              class="action-wide"
-              id="sign-button"
-            >Sign</button>
-            <mc-color
-              class="selected-color"
-              aria-label="Selected paint color"
-              data-palette-source="selected"
-              data-attr:color="$paint.selection.color || ''"
-            ></mc-color>
-            <button
-              type="button"
-              class="action-tile"
               aria-label="Pick a color from the canvas"
               data-attr:aria-pressed="$paint.tool === 'picker' ? 'true' : 'false'"
               data-on:click="$paint.tool = 'picker'"
             >Pick</button>
             <button
               type="button"
-              class="action-tile"
               aria-label="Water: drag onto a custom color"
               data-palette-source="water"
             >H2O</button>
-            <button
-              type="button"
-              class="action-tile"
-              aria-label="Add dye: coming soon"
-              disabled
-            >+</button>
           </div>
 
           <paint-palette
@@ -174,6 +160,12 @@
             data-on:palette-color-selected="$paint.selection = evt.detail; $paint.erase = false"
             data-on:palette-state-changed="$palette = evt.detail.palette; $paint.selection = evt.detail.selection"
           ></paint-palette>
+
+          <button
+            type="button"
+            class="sign-action"
+            id="sign-button"
+          >Sign</button>
         </section>
       </div>
     </main>

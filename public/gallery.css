@@ -54,28 +54,24 @@
   text-decoration: none;
 }
 
-.primary-action {
-  color: white;
-  background: var(--mc-blue);
-}
-
 .landing-note {
   position: relative;
   z-index: 3;
   width: fit-content;
   margin: 1rem 0 0;
   padding: 0.4rem 0.55rem;
+  color: var(--text);
   background: rgb(240 224 174 / 88%);
   font: 0.75rem/1.4 ui-monospace, monospace;
 }
 
 .display-page {
-  color: #fff8e5;
-  background: #17130d;
+  color: var(--ui-text);
+  background: var(--ui-bg-deep);
 }
 
 .display-page site-nav {
-  color: #fff8e5;
+  color: var(--ui-text);
 }
 
 .display-main {
@@ -102,7 +98,7 @@
 }
 
 .display-heading p:last-child {
-  color: #d5c8a8;
+  color: #b8b8b8;
   font: 0.8rem/1.5 ui-monospace, monospace;
 }
 

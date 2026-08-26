@@ -102,12 +102,13 @@ class MCColor extends HTMLElement {
       <style>
         :host { display: block; inline-size: var(--well-size, 2rem); block-size: var(--well-size, 2rem); }
         .well {
-          inline-size: 100%; block-size: 100%; border: 2px solid rgb(29 29 33 / 55%);
+          inline-size: 100%; block-size: 100%; border: 2px solid #000;
           border-radius: 0; background: var(--well-color, ${EMPTY_WELL_COLOR});
+          box-shadow: inset 1px 1px rgb(255 255 255 / 28%), inset -1px -1px rgb(0 0 0 / 45%);
         }
-        :host([selected]) .well { outline: 3px solid #f9fffe; box-shadow: 0 0 0 5px #3c44aa; }
-        :host(:focus-visible) { outline: 3px solid #3c44aa; outline-offset: 3px; }
-        :host([disabled]) .well { opacity: .55; }
+        :host([selected]) .well { outline: 3px solid #3ab3da; outline-offset: 2px; box-shadow: 0 0 0 5px #3c44aa; }
+        :host(:focus-visible) { outline: 3px solid #3ab3da; outline-offset: 3px; }
+        :host([disabled]) .well { filter: grayscale(1) brightness(.45); }
       </style>
       <div class="well"></div>
     `;
@@ -498,7 +499,7 @@ class PaintPalette extends HTMLElement {
         -webkit-user-select: none;
         user-select: none;
       }
-      mc-color[drop-eligible] { outline: 1px solid rgb(139 113 68 / 60%); outline-offset: 1px; }
+      mc-color[drop-eligible] { outline: 1px solid rgb(58 179 218 / 70%); outline-offset: 1px; }
       mc-color[drop-target] { animation: target-pulse 450ms ease-in-out infinite alternate; }
       mc-color[drop-confirmed] { animation: drop-confirm 300ms ease-out; }
       @keyframes target-pulse { to { filter: brightness(1.08); } }
