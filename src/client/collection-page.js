@@ -249,9 +249,10 @@ function setFlag(key) {
 // "Sign in with a passkey" — per the same design, an already-signed-in
 // account isn't the case this is built for.
 
-let transferCountdownInterval = /** @type {ReturnType<typeof setInterval> | null} */ (
-  null
-);
+let transferCountdownInterval =
+  /** @type {ReturnType<typeof setInterval> | null} */ (
+    null
+  );
 
 function clearTransferCountdown() {
   if (transferCountdownInterval !== null) {
@@ -293,14 +294,16 @@ function renderTransferCodeDisplay(code, expiresAt) {
   function tick() {
     const remainingMs = expiresAt - Date.now();
     if (remainingMs <= 0) {
-      countdown.textContent = "Expired — generate a new one if you still need it.";
+      countdown.textContent =
+        "Expired — generate a new one if you still need it.";
       clearTransferCountdown();
       return;
     }
     const minutes = Math.floor(remainingMs / 60_000);
     const seconds = Math.floor((remainingMs % 60_000) / 1000);
-    countdown.textContent =
-      `Single use — expires in ${minutes}:${String(seconds).padStart(2, "0")}`;
+    countdown.textContent = `Single use — expires in ${minutes}:${
+      String(seconds).padStart(2, "0")
+    }`;
   }
   tick();
   transferCountdownInterval = setInterval(tick, 1000);
@@ -379,11 +382,13 @@ function renderTransferConsumeSection() {
 
 function renderGuestNudge() {
   clearTransferCountdown();
-  if (flagSet(UPGRADE_NUDGE_DISMISSED_KEY)) {
-    accountPanel.replaceChildren();
-    accountPanel.hidden = true;
-    return;
-  }
+  // "Not now" dismisses the PERSUASION, never the controls. Hiding the panel
+  // outright used to leave a guest with no route to sign in, register, or
+  // enter a transfer code at all — permanently, since the flag outlives any
+  // amount of clearing on the server side. The account controls are the only
+  // way into an account, so they always stay reachable; only the sales pitch
+  // and the "Not now" button go away.
+  const dismissed = flagSet(UPGRADE_NUDGE_DISMISSED_KEY);
   // Ordering with pwa.js's post-signing install banner — see the note by
   // showInstallBanner() there: if that banner claimed this exact page
   // load, hold the account nudge back for it and show it on the next
@@ -396,16 +401,16 @@ function renderGuestNudge() {
   } catch {
     // Fall through — worst case both affordances show together.
   }
-  if (installBannerShownThisLoad) {
-    accountPanel.replaceChildren();
-    accountPanel.hidden = true;
-    return;
-  }
+  // If the post-signing install banner claimed this page load, don't stack a
+  // second pitch on top of it — but still render the controls themselves.
+  const quiet = dismissed || installBannerShownThisLoad;
   accountPanel.hidden = false;
   const nudge = document.createElement("div");
   nudge.className = "account-nudge";
   const text = document.createElement("p");
-  text.textContent = "Accounts let your paintings follow you to other devices.";
+  text.textContent = quiet
+    ? "Account"
+    : "Accounts let your paintings follow you to other devices.";
   const actions = document.createElement("div");
   actions.className = "handle-row";
   const upgrade = document.createElement("button");
@@ -425,14 +430,17 @@ function renderGuestNudge() {
     ? "Passkeys aren't supported in this browser."
     : "";
   signIn.addEventListener("click", () => void handleSignInClick(signIn));
-  const dismiss = document.createElement("button");
-  dismiss.type = "button";
-  dismiss.textContent = "Not now";
-  dismiss.addEventListener("click", () => {
-    setFlag(UPGRADE_NUDGE_DISMISSED_KEY);
-    renderGuestNudge();
-  });
-  actions.append(upgrade, signIn, dismiss);
+  actions.append(upgrade, signIn);
+  if (!quiet) {
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.textContent = "Not now";
+    dismiss.addEventListener("click", () => {
+      setFlag(UPGRADE_NUDGE_DISMISSED_KEY);
+      renderGuestNudge();
+    });
+    actions.append(dismiss);
+  }
   nudge.append(text, actions);
   nudge.append(renderTransferGenerateSection(), renderTransferConsumeSection());
   accountPanel.replaceChildren(nudge);

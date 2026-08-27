@@ -234,3 +234,11 @@ dialog.pixel-dialog::backdrop {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The `hidden` attribute must win over any component's own `display`. A
+   class selector beats the UA stylesheet's `[hidden]` rule, so a styled
+   element set hidden in JS otherwise still paints — an emptied account
+   panel showed up as a bare grey bar exactly this way. */
+[hidden] {
+  display: none !important;
+}
