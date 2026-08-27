@@ -119,7 +119,12 @@ class PaintingParade extends HTMLElement {
         :host([mode="ambient"]) figure[data-row="top"] { top:18%; }
         :host([mode="ambient"]) figure[data-row="bottom"] { top:calc(18% + clamp(9rem,30vw,11rem)); }
       }
-      @media (prefers-reduced-motion:reduce) { figure { right:auto; left:var(--still-x); animation:none; } }
+      /* Deliberately NO prefers-reduced-motion override for the figures.
+         Cards drift on every device and every setting: the drifting gallery
+         IS the page, and pinning them still left nothing to look at. A
+         considered override of an accessibility preference, not an
+         oversight - see rebuildSlots(). The motion is a gentle ~28px per
+         second, and nothing scales, rotates or parallaxes while it moves. */
     `;
     const stage = document.createElement("div");
     stage.className = "stage";
@@ -242,25 +247,29 @@ class PaintingParade extends HTMLElement {
     const cardWidth = probe.figure.getBoundingClientRect().width;
     probe.figure.remove();
     const stageWidth = this.stage.getBoundingClientRect().width || innerWidth;
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const narrow = matchMedia("(max-width: 40rem)").matches;
+    // prefers-reduced-motion is intentionally not consulted here. It used to
+    // collapse this whole block — zero duration, a fixed slot count, no
+    // per-card phase — which pinned every card in a static grid. That was
+    // also the source of a frozen-replay bug, because the replay clock was
+    // read off the travel animation this branch deleted. One code path is
+    // both what the product wants and one fewer way to get stuck.
     const distance = stageWidth + cardWidth * 1.7;
-    const durationSeconds = reduced ? 0 : distance / config.speedPxPerSecond;
-    let slotCount = reduced ? narrow ? 4 : 8 : Math.max(
+    const durationSeconds = distance / config.speedPxPerSecond;
+    let slotCount = Math.max(
       2,
       Math.min(64, Math.ceil(durationSeconds / config.slotIntervalSeconds)),
     );
     if (slotCount % 2 !== 0) slotCount++;
-    const slotIntervalSeconds = reduced ? 0 : durationSeconds / slotCount;
+    const slotIntervalSeconds = durationSeconds / slotCount;
     this.dataset.slotCount = String(slotCount);
     this.dataset.travelDuration = String(durationSeconds);
     this.dataset.slotInterval = String(slotIntervalSeconds);
     for (let index = 0; index < slotCount; index++) {
       const slot = this.createSlot(index);
-      const phase = reduced ? 0 : (slotCount - index - 1) * slotIntervalSeconds;
+      const phase = (slotCount - index - 1) * slotIntervalSeconds;
       slot.figure.dataset.phaseSeconds = String(phase);
       slot.figure.style.setProperty("--travel-duration", `${durationSeconds}s`);
-      slot.figure.style.animationDelay = reduced ? "0s" : `${-phase}s`;
+      slot.figure.style.animationDelay = `${-phase}s`;
       this.slots.push(slot);
       this.stage.append(slot.figure);
     }
@@ -523,12 +532,12 @@ class PaintingParade extends HTMLElement {
   startCompletedPlayback(slot) {
     // Wall clock, NOT the card's CSS travel animation. Taking the clock from
     // getAnimations()[0].currentTime meant that wherever the travel
-    // animation did not exist — most importantly under
-    // prefers-reduced-motion, where the figure rule below sets
-    // `animation:none` — there was no clock at all: elapsed stayed pinned at
-    // zero and every completed card froze on its first frame. Reduced motion
-    // should stop cards flying across the screen, not stop the painting from
-    // being painted.
+    // animation did not exist there was no clock at all: elapsed stayed
+    // pinned at zero and every completed card froze on its first frame.
+    // That is how it originally broke, via a prefers-reduced-motion rule
+    // that set animation:none; that rule is gone now, but the coupling was
+    // the real defect. Watching the strokes land is how a viewer reads the
+    // art, and it should never depend on whether the card is also moving.
     slot.playbackStartedAt = Date.now();
     const travelMs = Number(
       slot.figure.getAnimations()[0]?.effect?.getComputedTiming().duration ??

@@ -11,6 +11,7 @@
     "test:e2e:routes": "deno run --env-file --allow-net --allow-env --allow-read --allow-run scripts/ephemeral-test-db.ts",
     "test:e2e:carousel": "deno run --env-file -A scripts/carousel-e2e.ts",
     "test:e2e:carousel:headed": "deno run --env-file -A scripts/carousel-e2e.ts --headed",
+    "test:e2e:reduced-motion": "deno run --env-file -A scripts/e2e-reduced-motion.ts",
     "test:e2e:passkey": "deno run --env-file -A scripts/e2e-passkey.ts",
     "test:e2e:transfer": "deno run --env-file -A scripts/e2e-transfer.ts",
     "test:e2e:merge-dialog": "deno run --env-file -A scripts/e2e-merge-dialog.ts",
