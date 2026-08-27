@@ -31,6 +31,11 @@ before adding a dependency to `src/client/`.
   scoped per Deno Deploy context (Production/Preview/Build/Local), and the
   tooling (`scripts/set-deploy-env.ts`) needed to set a different value per
   context under one key, which the `deno deploy` CLI can't do on its own.
+- `docs/signing-key-rotation.md` — how to rotate `PAINTING_KEYS`, the HMAC
+  keyset behind guest session cookies (and, from Phase 3 on, WebAuthn
+  challenges/merge tokens/transfer codes): generating a key, the waiting
+  period before dropping an old one, and the deliberate tradeoff of dropping
+  one early.
 
 Read the relevant doc before touching databases or deploy configuration — both
 have sharp edges that already bit us once each (a classic-engine database that

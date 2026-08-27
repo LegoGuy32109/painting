@@ -61,6 +61,21 @@
   font: 0.75rem/1.4 ui-monospace, monospace;
 }
 
+.card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.card-actions .pixel-button,
+.card-actions .danger-button {
+  min-height: 2.25rem;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.75rem;
+  text-align: center;
+  text-decoration: none;
+}
+
 .empty-collection {
   grid-column: 1 / -1;
   padding: 2rem;
@@ -76,4 +91,221 @@
   .collection-heading .pixel-button {
     text-align: center;
   }
+}
+
+.account-panel {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+  padding: 1rem 1.25rem;
+}
+
+.account-panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.account-panel p {
+  margin: 0;
+  font: 0.8rem/1.5 ui-monospace, monospace;
+}
+
+.account-nudge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.account-nudge .pixel-button {
+  flex-shrink: 0;
+}
+
+.account-warning {
+  padding: 0.5rem 0.75rem;
+  border: 0.125rem solid var(--mc-red);
+  color: var(--mc-white);
+  background: var(--mc-red);
+  font: 0.75rem/1.4 ui-monospace, monospace;
+}
+
+.handle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.handle-rename-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.handle-rename-form input {
+  min-width: 12rem;
+  padding: 0.4rem 0.5rem;
+  border: 0.125rem solid var(--ui-border);
+  background: var(--paper-bright);
+  color: var(--text);
+}
+
+.credential-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.credential-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--paper-bright);
+  box-shadow: inset 0.125rem 0.125rem rgb(255 255 255 / 55%);
+}
+
+.credential-row .credential-meta {
+  display: grid;
+  gap: 0.15rem;
+  font: 0.75rem/1.4 ui-monospace, monospace;
+  color: var(--mc-brown);
+}
+
+.credential-badge {
+  padding: 0.1rem 0.4rem;
+  border: 0.125rem solid var(--ui-border);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.credential-badge.synced {
+  background: var(--mc-lime);
+  color: var(--mc-black);
+}
+
+.credential-badge.device-bound {
+  background: var(--mc-orange);
+  color: var(--mc-black);
+}
+
+@media (max-width: 34rem) {
+  .account-nudge {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .handle-rename-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* --- Phase 4: sign-in merge dialog -------------------------------------- */
+
+.merge-dialog {
+  width: min(calc(100% - 2rem), 34rem);
+}
+
+.merge-drafts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.merge-draft {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  background: var(--paper);
+  box-shadow: inset 0.125rem 0.125rem rgb(255 255 255 / 55%);
+}
+
+.merge-draft canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 0.125rem solid var(--border-dark);
+  background: var(--mc-white);
+  image-rendering: pixelated;
+}
+
+.merge-draft-label {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+.merge-draft-meta {
+  margin: 0;
+  color: var(--mc-brown);
+  font: 0.7rem/1.4 ui-monospace, monospace;
+}
+
+.merge-dialog-actions {
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+}
+
+@media (min-width: 30rem) {
+  .merge-dialog-actions {
+    grid-template-columns: auto 1fr 1fr;
+    align-items: center;
+  }
+}
+
+/* --- Phase 5: transfer codes -------------------------------------------- */
+
+.transfer-generate,
+.transfer-consume-form {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 0.125rem dashed var(--ui-border);
+}
+
+.transfer-consume-form label {
+  display: grid;
+  gap: 0.4rem;
+  font: 0.8rem/1.4 ui-monospace, monospace;
+}
+
+.transfer-consume-form input {
+  min-height: 2.75rem;
+  padding: 0.5rem;
+  border: 0.1875rem solid var(--ui-border);
+  color: var(--ui-text);
+  background: var(--paper-bright);
+  font: 1.1rem/1.2 ui-monospace, monospace;
+  letter-spacing: 0.1em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.transfer-code-display {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: center;
+  padding: 1rem;
+  background: var(--paper-bright);
+  box-shadow: inset 0.125rem 0.125rem rgb(255 255 255 / 55%);
+}
+
+.transfer-code-value {
+  margin: 0;
+  color: var(--ui-text);
+  font: bold 2rem/1.2 ui-monospace, monospace;
+  letter-spacing: 0.15em;
+}
+
+.transfer-code-countdown {
+  margin: 0;
+  color: var(--mc-brown);
+  font: 0.75rem/1.4 ui-monospace, monospace;
 }

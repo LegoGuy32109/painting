@@ -90,7 +90,9 @@ export class LiveCanvasSimulator {
     const id = this.canvasIds[index];
     if (!id) throw new Error(`no simulated canvas at index ${index}`);
     const now = Date.now();
-    await retry(() => completeCanvas(this.#db, id, title, now));
+    await retry(() =>
+      completeCanvas(this.#db, id, title, "Simulated Author", now)
+    );
     const { events } = await retry(() => pullEventsSince(this.#db, id, 0));
     await retry(() =>
       storeCanvasPixels(

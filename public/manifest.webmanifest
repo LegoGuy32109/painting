@@ -1,0 +1,47 @@
+{
+  "id": "/",
+  "name": "Joy of Painting",
+  "short_name": "Painting",
+  "description": "A browser-based pixel painting app inspired by the Joy of Painting Minecraft mod.",
+  "start_url": "/editor",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "theme_color": "#f0e0ae",
+  "background_color": "#f0e0ae",
+  "launch_handler": { "client_mode": "navigate-existing" },
+  "handle_links": "preferred",
+  "categories": ["entertainment", "graphics"],
+  "lang": "en",
+  "shortcuts": [
+    {
+      "name": "New painting",
+      "url": "/editor",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Your collection",
+      "url": "/collection",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [
+    {
+      "src": "/icons/screenshot-narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow"
+    },
+    {
+      "src": "/icons/screenshot-wide.png",
+      "sizes": "1280x800",
+      "type": "image/png",
+      "form_factor": "wide"
+    }
+  ]
+}

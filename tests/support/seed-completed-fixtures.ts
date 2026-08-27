@@ -66,6 +66,7 @@ export async function seedCompletedFixtures(
       db,
       id,
       `${recording.title} ${recordingIndex + 1}`,
+      "Fixture Author",
       Date.now() + recordingIndex,
     );
     const rows = fixtureEvents.map((event, index) => ({

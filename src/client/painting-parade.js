@@ -462,7 +462,7 @@ class PaintingParade extends HTMLElement {
     let replay = this.replayCache.get(canvasId);
     if (!replay) {
       replay = this.queueReplayRequest(async () => {
-        const response = await fetch(`/canvases/${canvasId}/replay?v=5`);
+        const response = await fetch(`/canvases/${canvasId}/replay`);
         if (!response.ok) throw new Error(`replay failed: ${response.status}`);
         return await response.json();
       });

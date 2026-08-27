@@ -1,6 +1,7 @@
 // @ts-check
 
-import { initSync } from "./sync.js?v=3";
+import { initSync } from "./sync.js";
+import { describeSyncStatus, markPaintingSigned } from "./pwa.js";
 
 const canvas = document.querySelector("paint-canvas");
 const status = document.getElementById("sync-status");
@@ -8,8 +9,9 @@ if (!(canvas instanceof HTMLElement) || !status) {
   throw new Error("editor shell is incomplete");
 }
 const sync = initSync(canvas, (next) => {
-  status.textContent = next.message;
-  status.dataset.state = next.kind;
+  const shown = describeSyncStatus(next);
+  status.textContent = shown.message;
+  status.dataset.state = shown.kind;
 });
 
 const dialog = /** @type {HTMLDialogElement} */ (
@@ -54,6 +56,7 @@ form.addEventListener("submit", async (event) => {
   dialogStatus.textContent = "Signing and saving…";
   const signed = await sync.sign(value);
   if (signed) {
+    markPaintingSigned();
     location.assign("/collection");
     return;
   }

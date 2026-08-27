@@ -15,7 +15,7 @@ import {
   listPendingLocalEvents,
   markSyncedAndGraduate,
   openLocalDb,
-} from "./local-db.js?v=3";
+} from "./local-db.js";
 import { localUlid } from "../shared/ulid.js";
 import { encodeCells } from "../shared/cell-codec.js";
 import { composeCanvas } from "../shared/compose.js";

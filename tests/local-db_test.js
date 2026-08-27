@@ -210,3 +210,77 @@ Deno.test("cached completed paintings list newest first without exposing owner i
   );
   db.close();
 });
+
+Deno.test("the v3 upgrade rebuilds every object store from scratch, dropping old data", async () => {
+  // Simulate a browser that already has an old-shaped local DB on disk —
+  // deliberately deleted and rebuilt from an old version, not just opened
+  // fresh, so this actually exercises openLocalDb()'s onupgradeneeded path
+  // rather than a no-op open-at-current-version.
+  await new Promise((resolve, reject) => {
+    const deleteRequest = indexedDB.deleteDatabase("painting-local");
+    deleteRequest.onsuccess = () => resolve(undefined);
+    deleteRequest.onerror = () => reject(deleteRequest.error);
+  });
+
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.open("painting-local", 1);
+    request.onupgradeneeded = () => {
+      const oldDb = request.result;
+      oldDb.createObjectStore("canvas_snapshot", { keyPath: "canvasId" });
+      const localEvents = oldDb.createObjectStore("local_events", {
+        keyPath: "localKey",
+        autoIncrement: true,
+      });
+      localEvents.createIndex("by_canvas_status", ["canvasId", "status"]);
+      // The v1 shape this replaced: a "canvases_local" store indexed by
+      // ["ownerId", "completedAt"] instead of v2's plain "by_completed".
+      const canvasesLocal = oldDb.createObjectStore("canvases_local", {
+        keyPath: "id",
+      });
+      canvasesLocal.createIndex("by_owner_completed", [
+        "ownerId",
+        "completedAt",
+      ]);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  }).then((oldDb) => {
+    const tx = oldDb.transaction("canvases_local", "readwrite");
+    tx.objectStore("canvases_local").add({
+      id: "stale-v1-record",
+      ownerId: "someone",
+      completedAt: 1,
+    });
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => {
+        oldDb.close();
+        resolve(undefined);
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  });
+
+  // Now open through the real module, at its current DB_VERSION — this is
+  // the upgrade under test.
+  const db = await openLocalDb();
+
+  // The v1 record is gone: the whole store was dropped and recreated, not
+  // migrated.
+  assertEquals(await listCachedCompleted(db), []);
+
+  // And the new (v2/v3) "by_completed" index is genuinely present and
+  // functional, not just a store that happens to exist.
+  await upsertCanvasLocal(db, {
+    id: "fresh-after-upgrade",
+    title: "After upgrade",
+    completedAt: 5,
+    pixels: new Uint8Array(4),
+    createdAt: 5,
+  });
+  assertEquals(
+    (await listCachedCompleted(db)).map((c) => c.id),
+    ["fresh-after-upgrade"],
+  );
+  await deleteCanvasLocal(db, "fresh-after-upgrade");
+  db.close();
+});

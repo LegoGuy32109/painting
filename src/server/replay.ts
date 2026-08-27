@@ -30,6 +30,7 @@ function pixelsBase64(events: CanvasEventRow[]): string {
 export function buildCanvasReplay(
   id: string,
   title: string,
+  author: string | null,
   events: CanvasEventRow[],
   eventLimit = REPLAY_EVENT_LIMIT,
 ): CanvasReplayResponse {
@@ -41,6 +42,7 @@ export function buildCanvasReplay(
     return {
       id,
       title,
+      author,
       initialPixels: pixels,
       finalPixels: pixels,
       durationMs: 0,
@@ -82,6 +84,7 @@ export function buildCanvasReplay(
   return {
     id,
     title,
+    author,
     initialPixels: pixelsBase64(prefix),
     finalPixels: pixelsBase64(events),
     durationMs: elapsed,

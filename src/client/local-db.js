@@ -6,7 +6,7 @@
 /** @typedef {import("../shared/paint-types.d.ts").CanvasHistoryRecord} CanvasHistoryRecord */
 
 const DB_NAME = "painting-local";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 /** @param {IDBRequest} request @returns {Promise<any>} */
 function toPromise(request) {
@@ -20,37 +20,34 @@ function toPromise(request) {
 export function openLocalDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = (event) => {
+    // Pre-production, no real users yet: every upgrade unconditionally
+    // rebuilds every object store from scratch instead of branching per
+    // oldVersion (the v1->v2 index-swap this replaced was already getting
+    // awkward at just one prior version). This DROPS any existing
+    // local_events/canvases_local/canvas_snapshot/canvas_history content —
+    // i.e. it wipes unsynced local strokes for anyone with an existing
+    // local DB (in practice, this project's own dev browser) — which is an
+    // acceptable, deliberate simplification pre-prod, not something to
+    // repeat once real users exist.
+    request.onupgradeneeded = () => {
       const db = request.result;
-      const oldVersion = event.oldVersion;
-      if (oldVersion < 1) {
-        db.createObjectStore("canvas_snapshot", { keyPath: "canvasId" });
-        const localEvents = db.createObjectStore("local_events", {
-          keyPath: "localKey",
-          autoIncrement: true,
-        });
-        localEvents.createIndex("by_canvas_status", ["canvasId", "status"]);
-        const canvasesLocal = db.createObjectStore("canvases_local", {
-          keyPath: "id",
-        });
-        canvasesLocal.createIndex("by_owner_completed", [
-          "ownerId",
-          "completedAt",
-        ]);
-        const canvasHistory = db.createObjectStore("canvas_history", {
-          keyPath: ["canvasId", "sequence"],
-        });
-        canvasHistory.createIndex("by_canvas", "canvasId");
+      for (const name of [...db.objectStoreNames]) {
+        db.deleteObjectStore(name);
       }
-      if (oldVersion < 2) {
-        const canvasesLocal = /** @type {IDBTransaction} */ (
-          request.transaction
-        ).objectStore("canvases_local");
-        if (canvasesLocal.indexNames.contains("by_owner_completed")) {
-          canvasesLocal.deleteIndex("by_owner_completed");
-        }
-        canvasesLocal.createIndex("by_completed", "completedAt");
-      }
+      db.createObjectStore("canvas_snapshot", { keyPath: "canvasId" });
+      const localEvents = db.createObjectStore("local_events", {
+        keyPath: "localKey",
+        autoIncrement: true,
+      });
+      localEvents.createIndex("by_canvas_status", ["canvasId", "status"]);
+      const canvasesLocal = db.createObjectStore("canvases_local", {
+        keyPath: "id",
+      });
+      canvasesLocal.createIndex("by_completed", "completedAt");
+      const canvasHistory = db.createObjectStore("canvas_history", {
+        keyPath: ["canvasId", "sequence"],
+      });
+      canvasHistory.createIndex("by_canvas", "canvasId");
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -203,6 +200,25 @@ export function deleteCanvasLocal(db, canvasId) {
       }
     };
   }
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve(undefined);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Seeds canvas_history with a canvas's server-side event log — used after
+ * a Phase 4 sign-in/merge adopts a draft this device has never painted on
+ * locally (the account's pre-existing draft, kept over the device's own),
+ * so initSync()'s local-first load (see sync.js) already has the right
+ * history without waiting on a live sync round trip. See
+ * collection-page.js's post-merge cleanup.
+ * @param {IDBDatabase} db @param {CanvasHistoryRecord[]} records
+ */
+export function seedCanvasHistory(db, records) {
+  const tx = db.transaction("canvas_history", "readwrite");
+  const history = tx.objectStore("canvas_history");
+  for (const record of records) history.put(record);
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve(undefined);
     tx.onerror = () => reject(tx.error);

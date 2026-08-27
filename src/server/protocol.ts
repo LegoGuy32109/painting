@@ -1,9 +1,13 @@
 import type {
   CompleteCanvasRequest,
   EnsureDraftRequest,
+  MergeRequest,
   PushEventPayload,
   PushEventsRequest,
+  RenameHandleRequest,
+  TransferConsumeRequest,
 } from "../shared/paint-types.d.ts";
+import { normalizeTransferCode } from "../shared/transfer-code.js";
 
 export const MAX_EVENTS_PER_PUSH = 64;
 export const MAX_JSON_BODY_BYTES = 160_000;
@@ -196,4 +200,67 @@ export function validateEnsureDraft(value: unknown): EnsureDraftRequest {
   }
   assertCanvasId(body.id);
   return { id: body.id };
+}
+
+// Letters, digits, spaces, and a small, deliberately restrictive
+// punctuation set (apostrophe, period, hyphen) — enough for names like
+// "O'Brien" or "J. R." without opening the door to control characters,
+// newlines, or anything that would make a handle awkward to display
+// plainly wherever it's shown (password manager sheets, /collection, a
+// future author byline). No profanity filtering — out of scope for a
+// hobby project, and a losing game to try to win.
+const HANDLE_PATTERN = /^[A-Za-z0-9' .-]+$/;
+
+export function validateHandleRename(value: unknown): RenameHandleRequest {
+  const body = record(value);
+  if (typeof body.handle !== "string") {
+    throw new HttpError(400, "handle must be text");
+  }
+  // Validate the RAW input against the charset allowlist FIRST — before
+  // any normalization. `\s` (used by a naive "collapse whitespace" regex)
+  // matches \n, \t, \r, and friends, not just the space character, so
+  // collapsing whitespace before this check would launder a newline into
+  // a legal space and silently rewrite what the user actually typed.
+  // Rejecting control characters outright, THEN normalizing only literal
+  // spaces, means the handle stored is either exactly what was typed
+  // (mod leading/trailing/repeated spaces) or rejected — never silently
+  // transformed into different text. This matters beyond validation
+  // hygiene: a handle is public author text on signed paintings.
+  if (!HANDLE_PATTERN.test(body.handle)) {
+    throw new HttpError(
+      400,
+      "handle may only contain letters, digits, spaces, apostrophes, periods, and hyphens",
+    );
+  }
+  // Only literal spaces (not \s) are collapsed/trimmed — a value that
+  // reaches this point has already been proven free of \n/\t/\r/etc.
+  const handle = body.handle.trim().replace(/ {2,}/g, " ");
+  const length = [...handle].length;
+  if (length < 3 || length > 32) {
+    throw new HttpError(400, "handle must contain 3 to 32 characters");
+  }
+  return { handle };
+}
+
+export function validateMergeRequest(value: unknown): MergeRequest {
+  const body = record(value);
+  if (typeof body.mergeToken !== "string" || body.mergeToken.length === 0) {
+    throw new HttpError(400, "mergeToken is required");
+  }
+  if (body.keep !== "device" && body.keep !== "account") {
+    throw new HttpError(400, 'keep must be "device" or "account"');
+  }
+  return { mergeToken: body.mergeToken, keep: body.keep };
+}
+
+export function validateTransferConsume(value: unknown): TransferConsumeRequest {
+  const body = record(value);
+  if (typeof body.code !== "string") {
+    throw new HttpError(400, "code is required");
+  }
+  const code = normalizeTransferCode(body.code);
+  if (!code) {
+    throw new HttpError(400, "that doesn't look like a transfer code");
+  }
+  return { code };
 }

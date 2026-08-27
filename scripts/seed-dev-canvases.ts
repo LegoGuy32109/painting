@@ -75,7 +75,7 @@ async function seedCompleted(title: string) {
     false,
     now,
   );
-  await completeCanvas(db, id, title, now);
+  await completeCanvas(db, id, title, "Dev Owner", now);
   console.log("completed:", id, title);
 }
 

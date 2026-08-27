@@ -1,0 +1,13 @@
+-- Phase 5: transfer codes need a per-code failed-attempt counter so a
+-- specific code can be invalidated after a small number of wrong/dead
+-- attempts against it (see docs/transfer-codes.md and
+-- POST /api/auth/transfer/consume in src/server/main.ts). This is a
+-- security control, not a performance guard, so it has to survive across
+-- server instances and restarts — an in-memory counter cannot guarantee
+-- that under Deno Deploy's multi-isolate model, unlike the purely
+-- perf-motivated per-process caches elsewhere in this codebase
+-- (ensuredCanvases/ensuredProfiles in main.ts).
+--
+-- 001_initial.sql is immutable once applied (see migrations.ts) — this is
+-- a genuinely new migration, not an edit to that file.
+ALTER TABLE transfer_codes ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0;
