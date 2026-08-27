@@ -5,7 +5,7 @@
 /** @typedef {import("../shared/paint-types.d.ts").LiveStreamMessage} LiveStreamMessage */
 /** @typedef {import("../shared/paint-types.d.ts").PublicCanvas} PublicCanvas */
 /** @typedef {{ canvas: PublicCanvas, kind: "active" | "completed" }} ParadeCandidate */
-/** @typedef {{ index: number, id: string | null, kind: "active" | "completed" | "placeholder", figure: HTMLElement, context: CanvasRenderingContext2D, title: HTMLElement, author: HTMLElement, state: HTMLElement, pixels: Int32Array, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number, playbackDurationMs: number, assignment: number, hydrating: boolean, pendingCandidate: ParadeCandidate | null }} ParadeSlot */
+/** @typedef {{ index: number, id: string | null, kind: "active" | "completed" | "placeholder", figure: HTMLElement, context: CanvasRenderingContext2D, title: HTMLElement, author: HTMLElement, state: HTMLElement, pixels: Int32Array, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, playbackStartedAt: number, playbackDurationMs: number, assignment: number, hydrating: boolean, pendingCandidate: ParadeCandidate | null }} ParadeSlot */
 
 import { LiveReplay } from "./live-replay.js";
 import { parseLiveStreamMessage } from "./live-stream-message.js";
@@ -21,6 +21,12 @@ import {
 const config = {
   speedPxPerSecond: 28,
   slotIntervalSeconds: 6,
+  // How long a completed painting's replay takes, in wall-clock ms. This is
+  // deliberately a duration of its own and not derived from how far a card
+  // has to travel: replaying the strokes is how a viewer reads the art, so
+  // it must behave identically whether the card drifts across a wide desktop
+  // stage, a narrow phone one, or (under prefers-reduced-motion) not at all.
+  completedReplayMs: 22_000,
   completedResumeDelayMs: 5_000,
   ...(/** @type {any} */ (window).__PAINTING_TEST_CONFIG__ ?? {}),
 };
@@ -316,7 +322,6 @@ class PaintingParade extends HTMLElement {
       replay: null,
       timeline: null,
       nextStep: 0,
-      animation: null,
       playbackStartedAt: 0,
       playbackDurationMs: 0,
       assignment: 0,
@@ -516,14 +521,27 @@ class PaintingParade extends HTMLElement {
 
   /** @param {ParadeSlot} slot */
   startCompletedPlayback(slot) {
-    slot.animation = slot.figure.getAnimations()[0] ?? null;
-    const duration = Number(
-      slot.animation?.effect?.getComputedTiming().duration ?? 0,
+    // Wall clock, NOT the card's CSS travel animation. Taking the clock from
+    // getAnimations()[0].currentTime meant that wherever the travel
+    // animation did not exist — most importantly under
+    // prefers-reduced-motion, where the figure rule below sets
+    // `animation:none` — there was no clock at all: elapsed stayed pinned at
+    // zero and every completed card froze on its first frame. Reduced motion
+    // should stop cards flying across the screen, not stop the painting from
+    // being painted.
+    slot.playbackStartedAt = Date.now();
+    const travelMs = Number(
+      slot.figure.getAnimations()[0]?.effect?.getComputedTiming().duration ??
+        0,
     );
-    const currentTime = Number(slot.animation?.currentTime ?? 0);
-    const phase = duration > 0 ? currentTime % duration : 0;
-    slot.playbackStartedAt = currentTime - phase;
-    slot.playbackDurationMs = Math.max(1, duration * .68);
+    // A card is only replaced once it has travelled out of the viewport, so
+    // a replay longer than its own travel window would be cut off unseen.
+    // Where travel exists, keep the previous 0.68-of-travel ceiling so the
+    // replay still lands before the card goes; where it does not, nothing
+    // removes the card and the configured duration applies as-is.
+    slot.playbackDurationMs = travelMs > 0
+      ? Math.max(1, Math.min(config.completedReplayMs, travelMs * .68))
+      : Math.max(1, config.completedReplayMs);
   }
 
   /** @param {string} canvasId */
@@ -588,10 +606,7 @@ class PaintingParade extends HTMLElement {
         continue;
       }
       if (slot.kind !== "completed" || !slot.timeline) continue;
-      const animationTime = Number(
-        slot.animation?.currentTime ?? slot.playbackStartedAt,
-      );
-      const elapsed = Math.max(0, animationTime - slot.playbackStartedAt) *
+      const elapsed = Math.max(0, Date.now() - slot.playbackStartedAt) *
         slot.timeline.durationMs / slot.playbackDurationMs;
       let changed = false;
       while (
