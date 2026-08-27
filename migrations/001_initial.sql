@@ -95,8 +95,18 @@ CREATE TABLE IF NOT EXISTS webauthn_challenges (
 -- Unused until Phase 5 (account transfer between devices) — created now
 -- for the same reason.
 CREATE TABLE IF NOT EXISTS transfer_codes (
-  code        TEXT PRIMARY KEY,
-  profile_id  TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  expires_at  INTEGER NOT NULL,
-  consumed_at INTEGER
+  code            TEXT PRIMARY KEY,
+  profile_id      TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  expires_at      INTEGER NOT NULL,
+  consumed_at     INTEGER,
+  -- Per-code failed-attempt counter so a specific code can be invalidated
+  -- after a small number of wrong/dead attempts against it (see
+  -- docs/transfer-codes.md and POST /api/auth/transfer/consume in
+  -- src/server/main.ts). This is a security control, not a performance
+  -- guard, so it has to survive across server instances and restarts — an
+  -- in-memory counter cannot guarantee that under Deno Deploy's
+  -- multi-isolate model, unlike the purely perf-motivated per-process
+  -- caches elsewhere in this codebase (ensuredCanvases/ensuredProfiles in
+  -- main.ts).
+  failed_attempts INTEGER NOT NULL DEFAULT 0
 );

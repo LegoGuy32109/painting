@@ -5,38 +5,72 @@
 // sync between an importer and the module it imports (see the phase notes
 // in AGENTS.md / the Phase 0.5 plan for the bug class this replaces).
 //
-// The route lists below (CLIENT_JS_FILES / SHARED_JS_FILES / CSS_FILES) are
-// deliberately NOT auto-discovered by scanning the directories: main.ts's
-// existing per-route allowlists are kept as the single source of truth for
-// WHICH files are served, and this module mirrors them. Adding a new served
-// file means updating both places, same as it always has.
+// The served-file lists below are derived by enumerating the directories
+// (see `listJsFiles` / `listCssFiles`), not hand-maintained — a new
+// src/shared/*.js (or src/client/*.js, or public/*.css) file is picked up
+// automatically the next time the manifest is computed. This closes the
+// same maintenance gap the hashed-URL scheme itself closes: previously, a
+// newly added shared module 404'd in the browser until someone remembered
+// to add it to a list by hand.
+//
+// A small number of client files are deliberately excluded even though
+// they live in the enumerated src/client/ directory — see
+// EXCLUDED_CLIENT_FILES below, and main.ts's own routes for the files
+// served unhashed on their own fixed paths (datastar.js,
+// Minecraftia-Regular.ttf). src/shared/*.js has NO such exclusion list:
+// every shared module is DOM-free domain logic that may legitimately be
+// imported by browser code (see e.g. jpaint.js's own header comment on why
+// it lives in src/shared/ rather than src/server/), so all of it is served
+// by default. Excluding a shared file on the strength of "nothing imports
+// it client-side today" would silently reintroduce the exact hand-listing
+// trap this module was rewritten to remove — the first person to add a
+// client-side use of it would hit a 404 instead of the file just being
+// there. The cost of serving an unused module is one manifest entry and one
+// hash of a small file, computed once per process; that is cheap insurance
+// against a real maintenance hazard.
 
-const CLIENT_JS_FILES = [
-  "app.js",
-  "sync.js",
-  "local-db.js",
-  "live-replay.js",
-  "live-stream-message.js",
-  "site-nav.js",
-  "painting-parade.js",
-  "parade-state.js",
-  "collection-page.js",
-  "editor-page.js",
-  "pwa.js",
-  "passkey.js",
-];
+// sw.js and sw-routing.js are served unhashed at fixed URLs by their own
+// routes in main.ts (a service worker has no import map to redirect a
+// relative specifier through, and a hashed, immutably-cached service
+// worker could never update itself). They must never be content-hashed or
+// appear in the import map/precache list. This is a genuine, permanent
+// technical constraint — unlike "nothing imports this yet" — which is why
+// only src/client/ has an exclusion set.
+const EXCLUDED_CLIENT_FILES = new Set(["sw.js", "sw-routing.js"]);
 
-const SHARED_JS_FILES = [
-  "paint-engine.js",
-  "palette-engine.js",
-  "ulid.js",
-  "cell-codec.js",
-  "compose.js",
-  "pixel-render.js",
-  "transfer-code.js",
-];
+const clientDirectory = new URL("../client/", import.meta.url);
+const sharedDirectory = new URL("../shared/", import.meta.url);
+const publicDirectory = new URL("../../public/", import.meta.url);
 
-const CSS_FILES = ["base.css", "style.css", "gallery.css", "collection.css"];
+/**
+ * Sorted list of `*.js` filenames directly inside `directory`, minus
+ * `excluded` (defaults to none). Sorting keeps enumeration order
+ * deterministic across processes and Deno.readDir's unspecified iteration
+ * order, which matters for `manifestDigest` stability.
+ */
+async function listJsFiles(
+  directory: URL,
+  excluded: Set<string> = new Set(),
+): Promise<string[]> {
+  const names: string[] = [];
+  for await (const entry of Deno.readDir(directory)) {
+    if (entry.isFile && entry.name.endsWith(".js") && !excluded.has(entry.name)) {
+      names.push(entry.name);
+    }
+  }
+  return names.sort();
+}
+
+/** Sorted list of `*.css` filenames directly inside `public/`. */
+async function listCssFiles(): Promise<string[]> {
+  const names: string[] = [];
+  for await (const entry of Deno.readDir(publicDirectory)) {
+    if (entry.isFile && entry.name.endsWith(".css")) {
+      names.push(entry.name);
+    }
+  }
+  return names.sort();
+}
 
 const JS_CONTENT_TYPE = "application/javascript; charset=utf-8";
 const CSS_CONTENT_TYPE = "text/css; charset=utf-8";
@@ -115,9 +149,10 @@ interface FileSpec {
   sourceUrl: URL;
 }
 
-function fileSpecs(): FileSpec[] {
+async function fileSpecs(): Promise<FileSpec[]> {
   const specs: FileSpec[] = [];
-  for (const name of CLIENT_JS_FILES) {
+  const clientNames = await listJsFiles(clientDirectory, EXCLUDED_CLIENT_FILES);
+  for (const name of clientNames) {
     specs.push({
       kind: "client",
       logicalPath: `/${name}`,
@@ -125,7 +160,8 @@ function fileSpecs(): FileSpec[] {
       sourceUrl: clientFile(name),
     });
   }
-  for (const name of SHARED_JS_FILES) {
+  const sharedNames = await listJsFiles(sharedDirectory);
+  for (const name of sharedNames) {
     specs.push({
       kind: "shared",
       logicalPath: `/shared/${name}`,
@@ -133,7 +169,8 @@ function fileSpecs(): FileSpec[] {
       sourceUrl: sharedFile(name),
     });
   }
-  for (const name of CSS_FILES) {
+  const cssNames = await listCssFiles();
+  for (const name of cssNames) {
     specs.push({
       kind: "css",
       logicalPath: `/${name}`,
@@ -153,7 +190,7 @@ function fileSpecs(): FileSpec[] {
 export async function computeAssetManifest(
   devMode: boolean,
 ): Promise<AssetManifest> {
-  const specs = fileSpecs();
+  const specs = await fileSpecs();
   const entries: AssetManifestEntry[] = [];
 
   for (const spec of specs) {

@@ -29,9 +29,10 @@ be read off one screen and typed into another, so it has to be short. Eight
 characters is nowhere near enough room for a signature plus a payload, so a
 transfer code carries no information at all beyond itself — it's a bare
 lookup key into the `transfer_codes` table (`code`, `profile_id`,
-`expires_at`, `consumed_at`, `failed_attempts`; the last added in
-`migrations/002_transfer_code_attempts.sql`, Phase 2's `001_initial.sql`
-being immutable once applied). This is *why* the security properties below
+`expires_at`, `consumed_at`, `failed_attempts`; all defined together in
+`migrations/001_initial.sql`, which stays the editable pre-production
+bootstrap schema until the first production release — see the README's
+"Database lifecycle" section). This is *why* the security properties below
 matter more here than for the merge token: there's no cryptography doing
 any of the work, only the database state.
 

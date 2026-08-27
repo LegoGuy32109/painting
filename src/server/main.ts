@@ -1939,8 +1939,8 @@ async function route(req: Request, ip: string): Promise<Response> {
   }
 
   // Content-hashed client/shared/css assets — see asset-manifest.ts for the
-  // served-file allowlists (kept in sync with this router by hand) and the
-  // hashing scheme. In dev mode the manifest is an identity map, so this
+  // served-file enumeration (derived from the filesystem, not hand-listed)
+  // and the hashing scheme. In dev mode the manifest is an identity map, so this
   // also serves the plain logical paths (/app.js, /shared/compose.js,
   // /base.css, ...) directly with no-store, same as always.
   const manifest = await getAssetManifest(isDevMode());
