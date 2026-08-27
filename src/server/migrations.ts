@@ -93,6 +93,19 @@ export async function pendingMigrations(db: Client): Promise<string[]> {
     result.rows.map((row) => [String(row.version), String(row.checksum)]),
   );
   const migrations = await readMigrations();
+  // Apply the SAME checksum check migrateDatabase() does, so a dry run
+  // predicts the real run instead of contradicting it. Without this, an
+  // already-applied migration whose file has since been edited reports as
+  // "nothing pending" — a false all-clear for a database whose real schema
+  // no longer matches the repo, where the actual migrate would then throw.
+  for (const migration of migrations) {
+    const existing = applied.get(migration.version);
+    if (existing && existing !== migration.checksum) {
+      throw new Error(
+        `migration ${migration.version} was changed after it was applied`,
+      );
+    }
+  }
   return migrations.filter((migration) => !applied.has(migration.version)).map((
     migration,
   ) => migration.version);
