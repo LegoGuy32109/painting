@@ -26,12 +26,22 @@ function diagonalStreak(argb: number): Array<[number, number]> {
   return Array.from({ length: 6 }, (_, i) => [i * 17 + i, argb]);
 }
 
+// Each seeded canvas gets its OWN owner id rather than a shared "dev-owner".
+// canvases_owner_draft_idx is a partial unique index enforcing exactly one
+// open (unsigned) draft per owner — a deliberate, load-bearing invariant of
+// this app — so a shared owner made this script runnable exactly once per
+// database, failing every later run with "UNIQUE constraint failed:
+// canvases.owner_id". Seeding is supposed to be repeatable.
+function seedOwner(): string {
+  return `dev-seed-${ulid()}`;
+}
+
 async function seedActive() {
   const id = ulid();
   await createCanvas(
     db,
     id,
-    "dev-owner",
+    seedOwner(),
     new Uint8Array(createPixels().buffer),
     now,
   );
@@ -57,7 +67,7 @@ async function seedCompleted(title: string) {
   await createCanvas(
     db,
     id,
-    "dev-owner",
+    seedOwner(),
     new Uint8Array(createPixels().buffer),
     now,
   );
