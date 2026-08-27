@@ -331,9 +331,11 @@ Deno.test("author is server-derived from the signer's own profile; a client-supp
       heartbeatActive: true,
     });
 
-    // validateCompletion only ever reads `title` (see protocol.ts) — this
-    // extra `author` field must be structurally dropped before it ever
-    // reaches completeCanvas(), not merely overridden after the fact.
+    // validateCompletion only ever reads `title` (see protocol.ts), and
+    // completeCanvas() no longer even accepts an author argument — the
+    // author reported below is always the joined profiles.handle for this
+    // canvas's owner_id, so a client-supplied `author` field has no path
+    // to influence it at all, not merely one that gets overridden.
     const signRes = await post(`/canvases/${canvasId}/complete`, {
       title: "Attribution Test",
       author: "Someone Else Entirely",
@@ -418,9 +420,39 @@ Deno.test("GET /canvases/:id/jpaint 404s for a draft and exports the full event 
   }
 });
 
-Deno.test("author snapshot semantics: renaming a profile's handle does not retroactively change an already-signed painting's author", async () => {
+Deno.test("after a rename, the renamer's signed painting reports the new handle in /api/me/canvases; another profile's painting is unaffected", async () => {
   const canvasId = ulid();
+  const otherSession = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  const otherCanvasId = ulid();
   try {
+    // Someone else's signed painting, to prove the rename is scoped.
+    await put("/api/me/draft", { id: otherCanvasId }, otherSession);
+    await post(`/canvases/${otherCanvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[0, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    }, otherSession);
+    await post(
+      `/canvases/${otherCanvasId}/complete`,
+      { title: "Someone Else" },
+      otherSession,
+    );
+    const otherBefore = await (await get("/api/me/canvases", otherSession))
+      .json();
+    const otherAuthor = otherBefore.completed.find(
+      (c: { id: string }) => c.id === otherCanvasId,
+    )?.author;
+    assertEquals(typeof otherAuthor, "string");
+
     await put("/api/me/draft", { id: canvasId });
     await post(`/canvases/${canvasId}/events`, {
       events: [{
@@ -433,34 +465,47 @@ Deno.test("author snapshot semantics: renaming a profile's handle does not retro
       }],
       heartbeatActive: true,
     });
-    await post(`/canvases/${canvasId}/complete`, { title: "Frozen Author" });
+    await post(`/canvases/${canvasId}/complete`, { title: "Follows Rename" });
 
     const beforeRename = await (await get("/api/me/canvases")).json();
-    const authorAtSigning = beforeRename.completed.find(
+    const authorBeforeRename = beforeRename.completed.find(
       (c: { id: string }) => c.id === canvasId,
     )?.author;
-    assertEquals(typeof authorAtSigning, "string");
+    assertEquals(typeof authorBeforeRename, "string");
 
-    // This is exactly the property that protects the design against a
-    // future regression to a read-time join of profiles.handle: author
-    // must have been COPIED at signing time, not referenced live.
+    // author is derived at read time by joining profiles.handle off
+    // owner_id (see getGuestDraft()/listGuestCompleted() etc. in db.ts) —
+    // there is nothing stored on the canvas to rewrite. Renaming the
+    // profile's handle is automatically reflected the next time this
+    // profile's own signed painting is read...
     const newHandle = `Renamed ${ulid().slice(0, 4)}`;
     const renamed = await put("/api/me/handle", { handle: newHandle });
     assertEquals(renamed.status, 200);
-    assertNotEquals(newHandle, authorAtSigning);
+    assertNotEquals(newHandle, authorBeforeRename);
 
     const afterRename = await (await get("/api/me/canvases")).json();
-    const authorAfterRename = afterRename.completed.find(
-      (c: { id: string }) => c.id === canvasId,
-    )?.author;
     assertEquals(
-      authorAfterRename,
-      authorAtSigning,
-      "author must stay exactly what it was at signing time, not follow the profile's current handle",
+      afterRename.completed.find((c: { id: string }) => c.id === canvasId)
+        ?.author,
+      newHandle,
+      "the renamer's own signed painting should carry the new handle",
     );
-    assertNotEquals(authorAfterRename, newHandle);
+
+    // ...and strictly nowhere else. This is the property that matters: the
+    // UPDATE (in renameHandle()) is scoped to a single profile id, so one
+    // profile's rename can never relabel another profile's public work.
+    const otherAfter = await (await get("/api/me/canvases", otherSession))
+      .json();
+    assertEquals(
+      otherAfter.completed.find((c: { id: string }) => c.id === otherCanvasId)
+        ?.author,
+      otherAuthor,
+      "another profile's painting must be untouched by someone else's rename",
+    );
   } finally {
     await dropCanvas(canvasId);
+    await dropCanvas(otherCanvasId);
+    await dropProfile(otherSession.guestId);
   }
 });
 

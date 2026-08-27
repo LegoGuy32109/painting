@@ -10,6 +10,7 @@ import {
   deleteCompletedCanvas,
   deleteCredential,
   ensureProfile,
+  getCompletedCanvas,
   getOrCreateDraft,
   getProfile,
   insertCredential,
@@ -22,11 +23,7 @@ import {
 } from "../src/server/db.ts";
 import { migrateDatabase } from "../src/server/migrations.ts";
 import { ulid } from "../src/shared/ulid.js";
-import {
-  backfillAuthors,
-  backfillProfiles,
-  DEFAULT_AUTHOR,
-} from "../scripts/backfill-profiles.ts";
+import { backfillProfiles } from "../scripts/backfill-profiles.ts";
 
 const db = createDb();
 await migrateDatabase(db);
@@ -98,7 +95,7 @@ Deno.test("only an owner can delete their completed canvas", async () => {
     args: [canvasId],
   });
   const owner = String(access.rows[0].owner_id);
-  await completeCanvas(db, canvasId, "Done", "Test Author", Date.now());
+  await completeCanvas(db, canvasId, "Done", Date.now());
   assertEquals(
     await deleteCompletedCanvas(db, canvasId, "someone-else"),
     false,
@@ -273,7 +270,6 @@ Deno.test("completeCanvas sets title/completedAt and forces active=false, visibl
       db,
       canvasId,
       "My Painting",
-      "Test Author",
       Date.now(),
     ),
     true,
@@ -283,7 +279,6 @@ Deno.test("completeCanvas sets title/completedAt and forces active=false, visibl
       db,
       canvasId,
       "Replacement",
-      "Test Author",
       Date.now(),
     ),
     false,
@@ -555,7 +550,6 @@ async function makeCanvasFor(
     db,
     id,
     "Backfill fixture",
-    "Backfill Author",
     createdAt,
   );
   return id;
@@ -750,113 +744,27 @@ Deno.test("createChallenge opportunistically sweeps expired rows", async () => {
   }
 });
 
-Deno.test("backfillAuthors uses a pre-existing handle, defaults an invented one, and never overwrites", async () => {
-  const ownerPreExisting = `backfill-author-owner-${ulid()}`;
-  const ownerMintedByRun = `backfill-author-owner-${ulid()}`;
-  const ownerNoProfile = `backfill-author-owner-${ulid()}`;
-  const canvasPreExisting = ulid();
-  const canvasMinted = ulid();
-  const canvasAlreadyHasAuthor = ulid();
-  const canvasOrphanOwner = ulid();
+Deno.test("author is a LEFT JOIN: a completed canvas whose owner has no profile row is still returned, with a null author", async () => {
+  // Deliberately never touches ensureProfile()/backfillProfiles() — this
+  // owner_id has no row in profiles at all, which an INNER join would
+  // exclude entirely. Losing a painting from the feed is worse than a
+  // missing name, so the join must be LEFT.
+  const orphanOwner = `orphan-owner-${ulid()}`;
+  const canvasId = await makeCanvasFor(orphanOwner, Date.now());
   try {
-    // A profile that genuinely predates the backfill run. Its handle is a
-    // real identity, so its painting should be attributed to it.
-    const existing = await ensureProfile(db, ownerPreExisting, 500);
-    await createCanvas(
-      db,
-      canvasPreExisting,
-      ownerPreExisting,
-      emptyPixels(),
-      1000,
-    );
-    await completeCanvas(db, canvasPreExisting, "Pre Existing", null, 1000);
+    const completed = await getCompletedCanvas(db, canvasId);
+    assertEquals(completed !== null, true);
+    assertEquals(completed?.author, null);
 
-    // An owner with canvases but no profile: backfillProfiles() will mint
-    // one, so its handle is invented seconds ago rather than recalled.
-    await createCanvas(db, canvasMinted, ownerMintedByRun, emptyPixels(), 1000);
-    await completeCanvas(db, canvasMinted, "Minted Owner", null, 1000);
-
-    await createCanvas(
-      db,
-      canvasAlreadyHasAuthor,
-      ownerPreExisting,
-      emptyPixels(),
-      1000,
-    );
-    await completeCanvas(
-      db,
-      canvasAlreadyHasAuthor,
-      "Already Signed",
-      "Hand-Set Author",
-      1000,
-    );
-
-    const profileResult = await backfillProfiles(db);
+    const recent = await listRecentlyCompleted(db, 200);
+    const mine = recent.find((c) => c.id === canvasId);
     assertEquals(
-      profileResult.mintedOwnerIds.includes(ownerMintedByRun),
+      mine !== undefined,
       true,
-      "the profile-less owner is reported as minted by this run",
+      "a canvas with no owning profile row must still appear in the feed",
     );
-    assertEquals(
-      profileResult.mintedOwnerIds.includes(ownerPreExisting),
-      false,
-      "an owner whose profile already existed is not reported as minted",
-    );
-
-    // Created AFTER backfillProfiles(), so this owner has no profile at all
-    // — the defensive remainder case.
-    await createCanvas(
-      db,
-      canvasOrphanOwner,
-      ownerNoProfile,
-      emptyPixels(),
-      1000,
-    );
-    await completeCanvas(db, canvasOrphanOwner, "Orphan Owner", null, 1000);
-
-    const first = await backfillAuthors(db, profileResult.mintedOwnerIds);
-    assertEquals(
-      first.updated,
-      1,
-      "only the pre-existing-profile canvas takes a handle",
-    );
-    assertEquals(
-      first.orphanedOwners,
-      1,
-      "the profile-less owner's canvas is counted",
-    );
-
-    const author = async (id: string) => {
-      const row = await db.execute({
-        sql: "SELECT author FROM canvases WHERE id = ?",
-        args: [id],
-      });
-      return row.rows[0].author;
-    };
-
-    // A real, pre-existing identity is used.
-    assertEquals(await author(canvasPreExisting), existing.handle);
-    // An identity this run invented is NOT used — attributing a painting to
-    // a name that did not exist when it was made would be noise shaped like
-    // data. The honest stand-in is used instead.
-    assertEquals(await author(canvasMinted), DEFAULT_AUTHOR);
-    assertEquals(await author(canvasOrphanOwner), DEFAULT_AUTHOR);
-    // Snapshot semantics: an author captured at signing is never rewritten.
-    assertEquals(await author(canvasAlreadyHasAuthor), "Hand-Set Author");
-
-    // Strictly idempotent: nothing left to do, nothing overwritten.
-    const second = await backfillAuthors(db, profileResult.mintedOwnerIds);
-    assertEquals(second.updated, 0);
-    assertEquals(second.defaulted, 0);
-    assertEquals(await author(canvasAlreadyHasAuthor), "Hand-Set Author");
-    assertEquals(await author(canvasPreExisting), existing.handle);
+    assertEquals(mine?.author, null);
   } finally {
-    await dropCanvas(canvasPreExisting);
-    await dropCanvas(canvasMinted);
-    await dropCanvas(canvasAlreadyHasAuthor);
-    await dropCanvas(canvasOrphanOwner);
-    await dropProfile(ownerPreExisting);
-    await dropProfile(ownerMintedByRun);
-    await dropProfile(ownerNoProfile);
+    await dropCanvas(canvasId);
   }
 });

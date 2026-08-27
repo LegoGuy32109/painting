@@ -8,17 +8,7 @@ CREATE TABLE IF NOT EXISTS canvases (
   created_at              INTEGER NOT NULL,
   last_stroke_at          INTEGER,
   client_reported_active  INTEGER NOT NULL DEFAULT 0,
-  completed_at            INTEGER,
-  -- Phase 3.5: the signer's profiles.handle AT THE MOMENT OF SIGNING,
-  -- copied here rather than joined live. This is deliberate snapshot
-  -- semantics, matching the "author: string | null, include only for
-  -- signed work" field in docs/joy-of-painting-interface-spec.md's Canvas
-  -- record: a later handle rename must NOT retroactively change the
-  -- author of an already-signed painting. Public (rendered on /collection
-  -- and the display feed) — unlike owner_id, which stays private forever.
-  -- Server-derived only: never accepted from a client request body (see
-  -- validateCompletion in protocol.ts, which only reads `title`).
-  author                  TEXT
+  completed_at            INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS canvases_active_idx

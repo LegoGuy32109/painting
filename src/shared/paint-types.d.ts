@@ -124,7 +124,7 @@ export interface CanvasLocalRecord {
   completedAt: number | null;
   pixels: Uint8Array;
   createdAt: number;
-  /** The signer's handle at signing time — see PublicCanvas.author. Optional here only because records cached before Phase 3.5 predate the field. */
+  /** The owner profile's current handle — see PublicCanvas.author. Optional here only because records cached before Phase 3.5 predate the field. */
   author?: string | null;
 }
 
@@ -180,7 +180,7 @@ export interface PublicCanvas {
   createdAt: number;
   lastStrokeAt: number | null;
   completedAt: number | null;
-  /** The signer's handle at the moment of signing — null until completed; never retroactively updated by a later rename. */
+  /** The owner profile's CURRENT handle, joined at read time — null if the owner has no profile row. Reflects a later handle rename immediately. */
   author: string | null;
 }
 
@@ -415,7 +415,7 @@ export type ReplayStep = ReplayDiffStep | ReplaySnapshotStep;
 export interface CanvasReplayResponse {
   id: string;
   title: string;
-  /** The signer's handle at signing time (see PublicCanvas.author) — null for a completed canvas that predates author capture and has not been backfilled. */
+  /** The owner profile's current handle (see PublicCanvas.author) — null if the owner has no profile row. */
   author: string | null;
   initialPixels: string;
   finalPixels: string;

@@ -1559,10 +1559,10 @@ async function route(req: Request, ip: string): Promise<Response> {
     }
     const { events } = await pullEventsSince(getDb(), canvasId, 0);
     // author comes straight off the already-fetched `completed` record —
-    // no extra query. Serializes as a plain JSON `null` for a completed
-    // canvas that predates author capture (Phase 3.5) and hasn't been
-    // backfilled (see scripts/backfill-profiles.ts); the client already
-    // treats other CanvasReplayResponse/PublicCanvas fields (`title`) as
+    // no extra query (getCompletedCanvas() already joins profiles.handle).
+    // Serializes as a plain JSON `null` for a canvas whose owner has no
+    // profile row at all; the client already treats other
+    // CanvasReplayResponse/PublicCanvas fields (`title`) as
     // possibly absent-ish, so a new nullable field is not a breaking
     // change. No cache-key bump needed either: this route is cached by
     // URL, adding a field is purely additive, and the client (see
@@ -1809,12 +1809,13 @@ async function route(req: Request, ip: string): Promise<Response> {
         headers: { "retry-after": "1" },
       });
     }
-    // author is ALWAYS derived here, server-side, from the authenticated
-    // session's own profile — never from the request body (validateCompletion
-    // above only ever reads `title`, so a client attempting to also send an
-    // `author` field has it silently structurally dropped, not merely
-    // overridden). This is the whole security property Phase 3.5 rests on:
-    // nobody can sign a painting under someone else's name.
+    // author is ALWAYS derived at read time from the owning profile's
+    // current handle — completeCanvas() has no author to write at all, so a
+    // client attempting to also send an `author` field has it silently
+    // structurally dropped by validateCompletion (which only ever reads
+    // `title`), not merely overridden. This is the whole security property
+    // Phase 3.5 rests on: nobody can sign a painting under someone else's
+    // name, and nobody can influence its author after the fact either.
     const signer = await ensureProfile(getDb(), session.guestId, Date.now());
     assertSessionEpoch(session, signer);
     const access = await accessOfCanvas(canvasId);
@@ -1827,16 +1828,10 @@ async function route(req: Request, ip: string): Promise<Response> {
       return new Response("canvas is already signed", { status: 409 });
     }
     const now = Date.now();
-    // Snapshot semantics, deliberately: this copies signer.handle as it is
-    // RIGHT NOW into canvases.author. A later rename (PUT /api/me/handle)
-    // must never retroactively change an already-signed painting's
-    // author — see the schema comment on canvases.author and the
-    // "author snapshot" test in tests/sync-routes_test.ts.
     const completed = await completeCanvas(
       getDb(),
       canvasId,
       body.title,
-      signer.handle,
       now,
     );
     if (!completed) {

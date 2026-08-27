@@ -294,17 +294,10 @@ class PaintingParade extends HTMLElement {
   createSlot(index) {
     const figure = document.createElement("figure");
     const row = index % 2 === 0 ? "top" : "bottom";
-    const narrow = matchMedia("(max-width: 40rem)").matches;
-    const columns = narrow ? 2 : 4;
-    const column = Math.floor(index / 2) % columns;
     figure.dataset.slotIndex = String(index);
     figure.dataset.canvasId = "";
     figure.dataset.kind = "placeholder";
     figure.dataset.row = row;
-    figure.style.setProperty(
-      "--still-x",
-      `${columns === 2 ? 5 + column * 50 : 4 + column * 24}%`,
-    );
     const canvas = document.createElement("canvas");
     const context = paintingContext(canvas);
     const title = document.createElement("span");

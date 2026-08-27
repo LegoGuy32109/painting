@@ -119,9 +119,9 @@ Deno.test("buildCanvasReplay threads author straight through, including null", (
   );
   assertEquals(withAuthor.author, "Cerulean Otter");
 
-  // A completed canvas that predates author capture (or hasn't been
-  // backfilled yet) has no handle to report — serializes as a plain JSON
-  // null, not an empty string or an omitted field.
+  // A canvas whose owner has no profiles row (an orphaned owner_id) has no
+  // handle to report — serializes as a plain JSON null, not an empty
+  // string or an omitted field.
   const withoutAuthor = buildCanvasReplay(
     "canvas",
     "Pre-existing",

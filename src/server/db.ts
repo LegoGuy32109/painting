@@ -47,7 +47,7 @@ export interface CanvasSummary {
   lastStrokeAt: number | null;
   clientReportedActive: boolean;
   completedAt: number | null;
-  /** The signer's handle AT THE MOMENT OF SIGNING — null until completed. See completeCanvas(). */
+  /** The owner profile's CURRENT handle, joined from `profiles` at read time — null if the owner has no profile row (e.g. a reaped or otherwise orphaned owner_id). Not stored on `canvases`; see the LEFT JOIN in every query that selects it. */
   author: string | null;
 }
 
@@ -174,6 +174,13 @@ export async function renameHandle(
   handle: string,
 ): Promise<"ok" | "conflict"> {
   try {
+    // A canvas's author is now derived at read time by joining
+    // profiles.handle off canvases.owner_id (see e.g. getGuestDraft(),
+    // listGuestCompleted() below) — there is nothing on canvases itself to
+    // propagate. Renaming the profile's handle here is automatically
+    // reflected the next time any of that profile's paintings are read,
+    // signed or not, and can never touch another profile's paintings since
+    // this UPDATE is scoped to a single profile id.
     await db.execute({
       sql: "UPDATE profiles SET handle = ? WHERE id = ?",
       args: [handle, profileId],
@@ -525,7 +532,8 @@ export async function createTransferCode(
   params: { code: string; profileId: string; now: number; ttlMs: number },
 ): Promise<void> {
   await db.execute({
-    sql: "DELETE FROM transfer_codes WHERE expires_at < ? OR consumed_at IS NOT NULL",
+    sql:
+      "DELETE FROM transfer_codes WHERE expires_at < ? OR consumed_at IS NOT NULL",
     args: [params.now],
   });
   await db.execute({
@@ -553,8 +561,7 @@ export async function consumeTransferCode(
   now: number,
 ): Promise<string | null> {
   const result = await db.execute({
-    sql:
-      "UPDATE transfer_codes SET consumed_at = ? " +
+    sql: "UPDATE transfer_codes SET consumed_at = ? " +
       "WHERE code = ? AND consumed_at IS NULL AND expires_at >= ? AND failed_attempts < ?",
     args: [now, code, now, TRANSFER_CODE_MAX_ATTEMPTS],
   });
@@ -581,7 +588,8 @@ export async function recordTransferCodeFailure(
   code: string,
 ): Promise<void> {
   await db.execute({
-    sql: "UPDATE transfer_codes SET failed_attempts = failed_attempts + 1 WHERE code = ?",
+    sql:
+      "UPDATE transfer_codes SET failed_attempts = failed_attempts + 1 WHERE code = ?",
     args: [code],
   });
 }
@@ -745,8 +753,10 @@ export async function getGuestDraft(
 ): Promise<CanvasRecord | null> {
   const result = await db.execute({
     sql:
-      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at, author " +
-      "FROM canvases WHERE owner_id = ? AND completed_at IS NULL LIMIT 1",
+      "SELECT c.id, c.owner_id, c.title, c.pixels, c.created_at, c.last_stroke_at, " +
+      "c.client_reported_active, c.completed_at, p.handle AS author " +
+      "FROM canvases c LEFT JOIN profiles p ON p.id = c.owner_id " +
+      "WHERE c.owner_id = ? AND c.completed_at IS NULL LIMIT 1",
     args: [ownerId],
   });
   return result.rows.length === 0 ? null : rowToRecord(result.rows[0]);
@@ -759,9 +769,11 @@ export async function listGuestCompleted(
 ): Promise<CanvasRecord[]> {
   const result = await db.execute({
     sql:
-      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at, author " +
-      "FROM canvases WHERE owner_id = ? AND completed_at IS NOT NULL " +
-      "ORDER BY completed_at DESC LIMIT ?",
+      "SELECT c.id, c.owner_id, c.title, c.pixels, c.created_at, c.last_stroke_at, " +
+      "c.client_reported_active, c.completed_at, p.handle AS author " +
+      "FROM canvases c LEFT JOIN profiles p ON p.id = c.owner_id " +
+      "WHERE c.owner_id = ? AND c.completed_at IS NOT NULL " +
+      "ORDER BY c.completed_at DESC LIMIT ?",
     args: [ownerId, limit],
   });
   return result.rows.map(rowToRecord);
@@ -773,8 +785,10 @@ export async function listRandomCompleted(
 ): Promise<CanvasRecord[]> {
   const result = await db.execute({
     sql:
-      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at, author " +
-      "FROM canvases WHERE completed_at IS NOT NULL ORDER BY RANDOM() LIMIT ?",
+      "SELECT c.id, c.owner_id, c.title, c.pixels, c.created_at, c.last_stroke_at, " +
+      "c.client_reported_active, c.completed_at, p.handle AS author " +
+      "FROM canvases c LEFT JOIN profiles p ON p.id = c.owner_id " +
+      "WHERE c.completed_at IS NOT NULL ORDER BY RANDOM() LIMIT ?",
     args: [limit],
   });
   return result.rows.map(rowToRecord);
@@ -786,8 +800,10 @@ export async function getCompletedCanvas(
 ): Promise<CanvasRecord | null> {
   const result = await db.execute({
     sql:
-      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at, author " +
-      "FROM canvases WHERE id = ? AND completed_at IS NOT NULL",
+      "SELECT c.id, c.owner_id, c.title, c.pixels, c.created_at, c.last_stroke_at, " +
+      "c.client_reported_active, c.completed_at, p.handle AS author " +
+      "FROM canvases c LEFT JOIN profiles p ON p.id = c.owner_id " +
+      "WHERE c.id = ? AND c.completed_at IS NOT NULL",
     args: [canvasId],
   });
   return result.rows.length === 0 ? null : rowToRecord(result.rows[0]);
@@ -886,25 +902,22 @@ export async function headSequence(
 }
 
 /**
- * `author` is the signer's CURRENT profiles.handle at the moment of
- * signing, captured here rather than joined live — see the schema comment
- * on canvases.author in migrations/001_initial.sql. The caller (main.ts's
- * POST /canvases/:id/complete) is responsible for deriving it server-side
- * from the authenticated session's profile; this function has no way to
- * enforce that itself, only to store whatever it's given.
+ * There is no `author` to write here: it's derived at read time by joining
+ * `profiles.handle` off `canvases.owner_id` (see e.g. getGuestDraft() below),
+ * so a canvas's author always reflects the owning profile's CURRENT handle,
+ * including handles changed after this canvas was signed.
  */
 export async function completeCanvas(
   db: Client,
   canvasId: string,
   title: string,
-  author: string | null,
   now: number,
 ): Promise<boolean> {
   const result = await db.execute({
     sql:
-      "UPDATE canvases SET title = ?, author = ?, completed_at = ?, client_reported_active = 0 " +
+      "UPDATE canvases SET title = ?, completed_at = ?, client_reported_active = 0 " +
       "WHERE id = ? AND completed_at IS NULL",
-    args: [title, author, now, canvasId],
+    args: [title, now, canvasId],
   });
   return result.rowsAffected === 1;
 }
@@ -939,9 +952,11 @@ export async function listActiveCanvases(
   staleAfterMs = 120_000,
 ): Promise<CanvasSummary[]> {
   const res = await db.execute({
-    sql:
-      "SELECT id, owner_id, title, created_at, last_stroke_at, client_reported_active, completed_at, author " +
-      "FROM canvases WHERE client_reported_active = 1 AND last_stroke_at > ? ORDER BY last_stroke_at DESC",
+    sql: "SELECT c.id, c.owner_id, c.title, c.created_at, c.last_stroke_at, " +
+      "c.client_reported_active, c.completed_at, p.handle AS author " +
+      "FROM canvases c LEFT JOIN profiles p ON p.id = c.owner_id " +
+      "WHERE c.client_reported_active = 1 AND c.last_stroke_at > ? " +
+      "ORDER BY c.last_stroke_at DESC",
     args: [now - staleAfterMs],
   });
   return res.rows.map(rowToSummary);
@@ -952,9 +967,10 @@ export async function listRecentlyCompleted(
   limit: number,
 ): Promise<CanvasSummary[]> {
   const res = await db.execute({
-    sql:
-      "SELECT id, owner_id, title, created_at, last_stroke_at, client_reported_active, completed_at, author " +
-      "FROM canvases WHERE completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT ?",
+    sql: "SELECT c.id, c.owner_id, c.title, c.created_at, c.last_stroke_at, " +
+      "c.client_reported_active, c.completed_at, p.handle AS author " +
+      "FROM canvases c LEFT JOIN profiles p ON p.id = c.owner_id " +
+      "WHERE c.completed_at IS NOT NULL ORDER BY c.completed_at DESC LIMIT ?",
     args: [limit],
   });
   return res.rows.map(rowToSummary);
@@ -976,15 +992,17 @@ export async function listCompletedPage(
   cursor: CompletedCursor | null = null,
 ): Promise<CanvasRecord[]> {
   const where = cursor
-    ? "WHERE completed_at IS NOT NULL AND (completed_at < ? OR (completed_at = ? AND id < ?)) "
-    : "WHERE completed_at IS NOT NULL ";
+    ? "WHERE c.completed_at IS NOT NULL AND (c.completed_at < ? OR (c.completed_at = ? AND c.id < ?)) "
+    : "WHERE c.completed_at IS NOT NULL ";
   const args = cursor
     ? [cursor.completedAt, cursor.completedAt, cursor.id, limit]
     : [limit];
   const res = await db.execute({
     sql:
-      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at, author " +
-      `FROM canvases ${where}ORDER BY completed_at DESC, id DESC LIMIT ?`,
+      "SELECT c.id, c.owner_id, c.title, c.pixels, c.created_at, c.last_stroke_at, " +
+      "c.client_reported_active, c.completed_at, p.handle AS author " +
+      "FROM canvases c LEFT JOIN profiles p ON p.id = c.owner_id " +
+      `${where}ORDER BY c.completed_at DESC, c.id DESC LIMIT ?`,
     args,
   });
   return res.rows.map(rowToRecord);
@@ -996,8 +1014,10 @@ export async function listCompletedByOwnerPrefix(
 ): Promise<CanvasRecord[]> {
   const res = await db.execute({
     sql:
-      "SELECT id, owner_id, title, pixels, created_at, last_stroke_at, client_reported_active, completed_at, author " +
-      "FROM canvases WHERE completed_at IS NOT NULL AND owner_id LIKE ? ORDER BY completed_at DESC",
+      "SELECT c.id, c.owner_id, c.title, c.pixels, c.created_at, c.last_stroke_at, " +
+      "c.client_reported_active, c.completed_at, p.handle AS author " +
+      "FROM canvases c LEFT JOIN profiles p ON p.id = c.owner_id " +
+      "WHERE c.completed_at IS NOT NULL AND c.owner_id LIKE ? ORDER BY c.completed_at DESC",
     args: [`${ownerPrefix}%`],
   });
   return res.rows.map(rowToRecord);

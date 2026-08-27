@@ -140,7 +140,7 @@ async function seedCompleted(title: string) {
     false,
     now,
   );
-  await completeCanvas(db, id, title, "Dev Owner", now);
+  await completeCanvas(db, id, title, now);
   console.log("completed:", id, title);
 }
 
