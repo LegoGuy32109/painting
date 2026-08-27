@@ -11,6 +11,7 @@ import {
   completeCanvas,
   createCanvas,
   createDb,
+  ensureProfile,
 } from "../src/server/db.ts";
 import { ulid } from "../src/shared/ulid.js";
 import { createPixels } from "../src/shared/paint-engine.js";
@@ -99,8 +100,15 @@ function timedStrokes(
 // this app — so a shared owner made this script runnable exactly once per
 // database, failing every later run with "UNIQUE constraint failed:
 // canvases.owner_id". Seeding is supposed to be repeatable.
-function seedOwner(): string {
-  return `dev-seed-${ulid()}`;
+async function seedOwner(): Promise<string> {
+  const id = `dev-seed-${ulid()}`;
+  // Give the owner a real profiles row, which mints it a handle. A painting's
+  // author is a LEFT JOIN onto that row, so a seeded canvas whose owner had
+  // no profile rendered with no author at all — technically correct, but it
+  // made seeded dev content unrepresentative of anything a real signer
+  // produces.
+  await ensureProfile(db, id, now);
+  return id;
 }
 
 async function seedActive() {
@@ -108,7 +116,7 @@ async function seedActive() {
   await createCanvas(
     db,
     id,
-    seedOwner(),
+    await seedOwner(),
     new Uint8Array(createPixels().buffer),
     now,
   );
@@ -128,7 +136,7 @@ async function seedCompleted(title: string) {
   await createCanvas(
     db,
     id,
-    seedOwner(),
+    await seedOwner(),
     new Uint8Array(createPixels().buffer),
     now,
   );
