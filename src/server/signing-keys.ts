@@ -71,7 +71,13 @@ export interface ParsedKeyset {
  * the cached, env-reading wrapper actually used at runtime.
  */
 export function parsePaintingKeysEnv(raw: string | undefined): ParsedKeyset {
-  if (!raw) throw new Error("PAINTING_KEYS must be set");
+  if (!raw) {
+    throw new Error(
+      "PAINTING_KEYS must be set. Run `deno task env:fill` to add a " +
+        "generated value to .env, or see .env.example for the expected " +
+        "format.",
+    );
+  }
   const items = raw.split(",").map((item) => item.trim()).filter((item) =>
     item.length > 0
   );

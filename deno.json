@@ -3,7 +3,7 @@
   "tasks": {
     "dev": "PAINTING_DEV=1 deno run -A --env-file src/server/main.ts",
     "check": "deno check src tests scripts && deno check --config deno.worker.json src/client/sw.js",
-    "test": "deno test --allow-read=public,src/client,src/shared --allow-env=GUEST_SESSION_SECRET,GUEST_SESSION_SECRET_PREVIOUS,PAINTING_KEYS,PAINTING_E2E,PAINTING_DEV,WEBAUTHN_RP_ID,WEBAUTHN_ORIGINS --ignore=tests/db_test.ts,tests/sync-routes_test.ts,tests/auth-merge_test.ts,tests/transfer-codes_test.ts tests",
+    "test": "deno test --allow-read=public,src/client,src/shared,.env.example --allow-env=GUEST_SESSION_SECRET,GUEST_SESSION_SECRET_PREVIOUS,PAINTING_KEYS,PAINTING_E2E,PAINTING_DEV,WEBAUTHN_RP_ID,WEBAUTHN_ORIGINS --ignore=tests/db_test.ts,tests/sync-routes_test.ts,tests/auth-merge_test.ts,tests/transfer-codes_test.ts tests",
     "test:replay": "deno test --allow-read=src/client,src/shared tests/live-replay_test.js",
     "test:db": "deno test --allow-net --allow-env --allow-read tests/db_test.ts",
     "test:routes": "deno test --allow-net --allow-env --allow-read tests/sync-routes_test.ts",
@@ -23,8 +23,10 @@
     "backup:db": "deno run --env-file --allow-net --allow-env --allow-read --allow-write scripts/backup-environment-db.ts",
     "clear:db": "deno run --env-file --allow-net --allow-env scripts/clear-environment-db.ts",
     "save": "deno run --allow-run --allow-read --allow-write scripts/save.ts",
+    "env:check": "deno run --allow-read=.env,.env.example scripts/env-check.ts",
+    "env:fill": "deno run --allow-read=.env,.env.example,.gitignore --allow-write scripts/env-fill.ts",
     "seed:dev": "deno run --allow-net --allow-env scripts/seed-dev-canvases.ts",
-    "backfill:profiles": "deno run --allow-net --allow-env scripts/backfill-profiles.ts"
+    "backfill:profiles": "deno run --env-file --allow-net --allow-env --allow-read scripts/backfill-profiles.ts"
   },
   "compilerOptions": {
     "checkJs": true,

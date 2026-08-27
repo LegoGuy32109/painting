@@ -43,6 +43,8 @@ JavaScript never receives an owner identifier.
 deno task dev
 deno task check
 deno task test
+deno task env:check
+deno task env:fill
 deno task save "feat: describe the change"
 ```
 
@@ -52,6 +54,17 @@ and declaration file in `src/` and `tests/`.
 `deno task test` runs the test suite with only the read permissions it needs.
 `deno task save` formats, type-checks, commits, and pushes; it requires a commit
 message and warns when run on `master`.
+
+`deno task env:check` reports, grouped by tier, which variables your local
+`.env` is missing or has malformed, and fails if a variable `deno task dev`
+needs to boot at all (`PAINTING_KEYS`) isn't set correctly. `deno task
+env:fill` appends whatever it safely can (a generated `PAINTING_KEYS`, sane
+WebAuthn defaults) without ever touching an existing line, and lists which
+remaining variables (Turso, Deno Deploy) you must supply yourself. Run
+`env:check` any time `deno task dev` won't start — a green `deno task test`
+does not prove `.env` is complete, because every `scripts/e2e-*.ts` harness
+injects its own env vars into the server subprocess it spawns and never
+touches your real `.env`.
 
 ## Database lifecycle
 

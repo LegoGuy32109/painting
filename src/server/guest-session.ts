@@ -35,14 +35,23 @@ const KID_PATTERN = /^[a-z0-9]{1,16}$/;
 let legacyPrimaryKeyPromise: Promise<CryptoKey | null> | null = null;
 let legacyPreviousKeyPromise: Promise<CryptoKey | null> | null = null;
 
+/**
+ * The length requirement legacySecretBytes() enforces at runtime, exposed
+ * as a pure check so callers that only have a candidate string (never the
+ * live env var) — see scripts/env-check.ts — can validate shape without
+ * duplicating the encoding logic.
+ */
+export function meetsLegacySecretLength(value: string): boolean {
+  return new TextEncoder().encode(value).byteLength >= 32;
+}
+
 function legacySecretBytes(name: string): ArrayBuffer | null {
   const configured = Deno.env.get(name);
   if (!configured) return null;
-  const bytes = new TextEncoder().encode(configured);
-  if (bytes.byteLength < 32) {
+  if (!meetsLegacySecretLength(configured)) {
     throw new Error(`${name} must contain at least 32 bytes`);
   }
-  return bytes.buffer;
+  return new TextEncoder().encode(configured).buffer;
 }
 
 function importLegacyKey(secret: ArrayBuffer): Promise<CryptoKey> {
