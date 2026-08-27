@@ -5,7 +5,7 @@
 /** @typedef {import("../shared/paint-types.d.ts").LiveStreamMessage} LiveStreamMessage */
 /** @typedef {import("../shared/paint-types.d.ts").PublicCanvas} PublicCanvas */
 /** @typedef {{ canvas: PublicCanvas, kind: "active" | "completed" }} ParadeCandidate */
-/** @typedef {{ index: number, id: string | null, kind: "active" | "completed" | "placeholder", figure: HTMLElement, context: CanvasRenderingContext2D, title: HTMLElement, state: HTMLElement, pixels: Int32Array, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number, playbackDurationMs: number, assignment: number, hydrating: boolean, pendingCandidate: ParadeCandidate | null }} ParadeSlot */
+/** @typedef {{ index: number, id: string | null, kind: "active" | "completed" | "placeholder", figure: HTMLElement, context: CanvasRenderingContext2D, title: HTMLElement, author: HTMLElement, state: HTMLElement, pixels: Int32Array, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number, playbackDurationMs: number, assignment: number, hydrating: boolean, pendingCandidate: ParadeCandidate | null }} ParadeSlot */
 
 import { LiveReplay } from "./live-replay.js";
 import { parseLiveStreamMessage } from "./live-stream-message.js";
@@ -96,8 +96,11 @@ class PaintingParade extends HTMLElement {
       canvas { display:block; width:100%; aspect-ratio:1; image-rendering:pixelated; background:#fff9ff; }
       figure[data-kind="placeholder"] canvas { opacity:.38; animation:loading-pulse .9s steps(2,end) infinite; }
       figure[data-kind="placeholder"] figcaption { color:#796f5e; }
-      figcaption { display:flex; justify-content:space-between; gap:.5rem; min-height:1.3rem; padding-top:.45rem; overflow:hidden; font:clamp(.55rem,1.4vw,.72rem)/1.2 ui-monospace,monospace; white-space:nowrap; }
+      figcaption { display:flex; align-items:flex-start; justify-content:space-between; gap:.5rem; min-height:1.3rem; padding-top:.45rem; overflow:hidden; font:clamp(.55rem,1.4vw,.72rem)/1.2 ui-monospace,monospace; white-space:nowrap; }
+      .meta { display:flex; min-width:0; flex-direction:column; overflow:hidden; }
       .title { overflow:hidden; text-overflow:ellipsis; }
+      .author { overflow:hidden; text-overflow:ellipsis; opacity:.62; }
+      .author:empty { display:none; }
       .live { color:#b02e26; }
       :host([mode="ambient"]) { opacity:.55; filter:saturate(.85); }
       :host([mode="ambient"]) figure { --size:clamp(6rem,15vw,10rem); }
@@ -291,9 +294,14 @@ class PaintingParade extends HTMLElement {
     const context = paintingContext(canvas);
     const title = document.createElement("span");
     title.className = "title";
+    const author = document.createElement("span");
+    author.className = "author";
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.append(title, author);
     const state = document.createElement("span");
     const caption = document.createElement("figcaption");
-    caption.append(title, state);
+    caption.append(meta, state);
     figure.append(canvas, caption);
     const slot = /** @type {ParadeSlot} */ ({
       index,
@@ -302,6 +310,7 @@ class PaintingParade extends HTMLElement {
       figure,
       context,
       title,
+      author,
       state,
       pixels: createPixels(),
       replay: null,
@@ -414,6 +423,7 @@ class PaintingParade extends HTMLElement {
     slot.figure.dataset.canvasId = "";
     slot.figure.dataset.kind = "placeholder";
     slot.title.textContent = "Loading painting";
+    slot.author.textContent = "";
     slot.state.className = "loading";
     slot.state.textContent = "LOADING";
     slot.pixels = createPixels();
@@ -430,6 +440,7 @@ class PaintingParade extends HTMLElement {
     slot.figure.dataset.canvasId = canvas.id;
     slot.figure.dataset.kind = "active";
     slot.title.textContent = canvas.title || "Painting now";
+    slot.author.textContent = canvas.author ? `by ${canvas.author}` : "";
     slot.state.className = "live";
     slot.state.textContent = "LIVE";
     slot.pixels =
@@ -447,6 +458,7 @@ class PaintingParade extends HTMLElement {
     slot.figure.dataset.canvasId = canvas.id;
     slot.figure.dataset.kind = "completed";
     slot.title.textContent = canvas.title || "Untitled";
+    slot.author.textContent = canvas.author ? `by ${canvas.author}` : "";
     slot.state.className = "replay";
     slot.state.textContent = "REPLAY";
     slot.pixels = decodePixels(timeline.initialPixels);

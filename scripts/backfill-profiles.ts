@@ -32,6 +32,9 @@ import { mintUniqueHandle } from "../src/server/handles.ts";
 
 export interface BackfillResult {
   inserted: number;
+  /** owner_ids whose profile (and handle) THIS run created — their handle is
+   * newly invented, not recalled, which backfillAuthors() relies on. */
+  mintedOwnerIds: string[];
   alreadyPresent: number;
   distinctOwners: number;
 }
@@ -51,6 +54,7 @@ export async function backfillProfiles(db: Client): Promise<BackfillResult> {
   );
 
   let inserted = 0;
+  const mintedOwnerIds: string[] = [];
   let alreadyPresent = 0;
 
   for (const row of distinctOwners.rows) {
@@ -75,6 +79,7 @@ export async function backfillProfiles(db: Client): Promise<BackfillResult> {
     });
     if (result.rowsAffected === 1) {
       inserted++;
+      mintedOwnerIds.push(ownerId);
     } else {
       alreadyPresent++;
     }
@@ -82,40 +87,72 @@ export async function backfillProfiles(db: Client): Promise<BackfillResult> {
 
   return {
     inserted,
+    mintedOwnerIds,
     alreadyPresent,
     distinctOwners: distinctOwners.rows.length,
   };
 }
 
 export interface AuthorBackfillResult {
+  /** Rows given the owning profile's pre-existing handle. */
   updated: number;
-  /** Completed, authorless canvases whose owner has no profile row, or a profile with no handle yet — should not happen after backfillProfiles(), but handled defensively rather than assumed away. */
-  skippedNoHandle: number;
+  /** Rows given DEFAULT_AUTHOR, for either reason described below. */
+  defaulted: number;
+  /** Of those, rows whose owner had no profile row at all. */
+  orphanedOwners: number;
 }
 
+/** Stand-in author for canvases whose real author cannot be known. */
+export const DEFAULT_AUTHOR = "Josh";
+
+/** SQLite caps bound parameters per statement; chunk well under it. */
+const OWNER_CHUNK = 200;
+
 /**
- * Sets `canvases.author` from the owning profile's CURRENT handle, for
- * already-completed canvases that don't have one yet. Must run AFTER
- * backfillProfiles() in the same process/script — it only reads existing
- * profiles, it never creates one.
+ * Sets `canvases.author` on already-completed canvases that lack one.
  *
- * Strictly idempotent and non-destructive: `author IS NULL` in the WHERE
- * clause means a canvas that already has an author (captured server-side
- * at signing time, see completeCanvas() in db.ts, or backfilled by an
- * earlier run of this exact script) is never touched again — that
- * matters beyond idempotency, since overwriting it would destroy Phase
- * 3.5's snapshot semantics for anyone who has since renamed their handle.
+ * Two distinct cases, and conflating them is what makes a backfill lie:
+ *
+ *  - The owner's profile ALREADY EXISTED, so its handle is a real identity
+ *    that predates this run. Use it.
+ *  - The owner's profile was minted by backfillProfiles() moments ago, so
+ *    its handle is a random name this script just invented. Using it would
+ *    put noise shaped like data on the public display wall — a painting
+ *    attributed to "Lime Dolphin A938", a name that did not exist when the
+ *    painting was made. Use DEFAULT_AUTHOR instead: not knowing who painted
+ *    something is honest, inventing an author is not.
+ *
+ * Strictly idempotent and non-destructive: `author IS NULL` throughout means
+ * a canvas that already has an author — captured server-side at signing (see
+ * completeCanvas() in db.ts) or set by an earlier run — is never touched.
+ * That matters beyond idempotency: overwriting it would destroy the snapshot
+ * semantics that stop a later handle rename from retroactively relabelling
+ * public work.
+ *
+ * Must run AFTER backfillProfiles(), and be passed its `mintedOwnerIds`.
+ * It only ever reads profiles; it never creates one.
  */
 export async function backfillAuthors(
   db: Client,
+  mintedOwnerIds: string[] = [],
 ): Promise<AuthorBackfillResult> {
-  const skipped = await db.execute(
-    "SELECT COUNT(*) AS n FROM canvases " +
-      "WHERE completed_at IS NOT NULL AND author IS NULL " +
-      "AND NOT EXISTS (" +
-      "SELECT 1 FROM profiles WHERE profiles.id = canvases.owner_id AND profiles.handle IS NOT NULL" +
-      ")",
-  );
+  let defaulted = 0;
+
+  // Case 2 first, so these rows are settled before the handle-based pass
+  // below could otherwise claim them.
+  for (let i = 0; i < mintedOwnerIds.length; i += OWNER_CHUNK) {
+    const chunk = mintedOwnerIds.slice(i, i + OWNER_CHUNK);
+    const placeholders = chunk.map(() => "?").join(", ");
+    const result = await db.execute({
+      sql: "UPDATE canvases SET author = ? " +
+        "WHERE completed_at IS NOT NULL AND author IS NULL " +
+        `AND owner_id IN (${placeholders})`,
+      args: [DEFAULT_AUTHOR, ...chunk],
+    });
+    defaulted += result.rowsAffected;
+  }
+
+  // Case 1: a profile that genuinely predates this run.
   const updated = await db.execute(
     "UPDATE canvases SET author = (" +
       "SELECT handle FROM profiles WHERE profiles.id = canvases.owner_id" +
@@ -126,9 +163,21 @@ export async function backfillAuthors(
       ")",
   );
 
+  // Whatever is left has no profile row at all, or one without a handle.
+  // Should not happen after backfillProfiles(), but a permanently blank
+  // author on a public painting is worse than a stand-in, so handle it
+  // rather than assume it away.
+  const remainder = await db.execute({
+    sql: "UPDATE canvases SET author = ? " +
+      "WHERE completed_at IS NOT NULL AND author IS NULL",
+    args: [DEFAULT_AUTHOR],
+  });
+  defaulted += remainder.rowsAffected;
+
   return {
     updated: updated.rowsAffected,
-    skippedNoHandle: Number(skipped.rows[0].n),
+    defaulted,
+    orphanedOwners: remainder.rowsAffected,
   };
 }
 
@@ -139,9 +188,20 @@ if (import.meta.main) {
     `Backfilled ${profileResult.inserted} profile(s); ${profileResult.alreadyPresent} ` +
       `already had one (${profileResult.distinctOwners} distinct owner_id total).`,
   );
-  const authorResult = await backfillAuthors(db);
+  const authorResult = await backfillAuthors(
+    db,
+    profileResult.mintedOwnerIds,
+  );
   console.log(
-    `Backfilled author on ${authorResult.updated} completed canvas(es); ` +
-      `${authorResult.skippedNoHandle} skipped (owner has no profile/handle).`,
+    `Backfilled author on ${authorResult.updated} completed canvas(es) from ` +
+      `their owner's pre-existing handle; ${authorResult.defaulted} fell back ` +
+      `to "${DEFAULT_AUTHOR}" (owner's identity was minted by this run, so a ` +
+      `handle would be invented rather than recalled` +
+      `${
+        authorResult.orphanedOwners > 0
+          ? `; ${authorResult.orphanedOwners} had no profile at all`
+          : ""
+      }). ` +
+      `No completed canvas is left without an author.`,
   );
 }

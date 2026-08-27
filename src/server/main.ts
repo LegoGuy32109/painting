@@ -86,6 +86,7 @@ import {
 import { consumeGuestMutation, consumeIpMutation } from "./rate-limit.ts";
 import { buildCanvasReplay } from "./replay.ts";
 import { buildJpaintDocument } from "../shared/jpaint.js";
+import { attachmentDisposition } from "./content-disposition.ts";
 import {
   type AssetManifest,
   buildImportMap,
@@ -1636,7 +1637,11 @@ async function route(req: Request, ip: string): Promise<Response> {
         "content-type": "application/x-jpaint+json",
         "cache-control": "public, max-age=3600, stale-while-revalidate=86400",
         "deno-cdn-cache-control": "public, s-maxage=86400",
-        "content-disposition": `attachment; filename="${canvasId}.jpaint"`,
+        "content-disposition": attachmentDisposition(
+          completed.title,
+          canvasId,
+          ".jpaint",
+        ),
       },
     });
   }

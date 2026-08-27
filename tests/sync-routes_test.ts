@@ -3,7 +3,12 @@
 // tests/main_test.ts (which requires no net/env perms) the same way
 // tests/db_test.ts is isolated from the plain unit-test task.
 
-import { assertEquals, assertMatch, assertNotEquals } from "@std/assert";
+import {
+  assertEquals,
+  assertMatch,
+  assertNotEquals,
+  assertStringIncludes,
+} from "@std/assert";
 import { handler } from "../src/server/main.ts";
 import { createDb } from "../src/server/db.ts";
 import { ulid } from "../src/shared/ulid.js";
@@ -377,10 +382,12 @@ Deno.test("GET /canvases/:id/jpaint 404s for a draft and exports the full event 
     // Its own media type, not plain JSON — Response.json() would hardcode
     // application/json, so the route must set this explicitly.
     assertEquals(res.headers.get("content-type"), "application/x-jpaint+json");
-    assertMatch(
-      res.headers.get("content-disposition") ?? "",
-      new RegExp(`attachment; filename="${canvasId}\.jpaint"`),
-    );
+    // The title, not the id — a ULID in a downloads folder tells the user
+    // nothing. Sanitized, with an RFC 5987 filename* alongside the ASCII
+    // fallback; see src/server/content-disposition.ts.
+    const disposition = res.headers.get("content-disposition") ?? "";
+    assertStringIncludes(disposition, 'filename="Exported.jpaint"');
+    assertStringIncludes(disposition, "filename*=UTF-8''Exported.jpaint");
     const doc = await res.json();
     assertEquals(doc.jpaint, 1);
     assertEquals(doc.id, canvasId);
