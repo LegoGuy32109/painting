@@ -22,7 +22,14 @@ import { classifyRequest } from "./sw-routing.js";
 const worker = self;
 
 const OFFLINE_URL = "/offline.html";
-const PRECACHE_PAGES = ["/", "/editor", "/display", "/collection", OFFLINE_URL];
+// Only the offline fallback is precached. The four real page routes used to
+// be here too, but every one of them mints a guest profile server-side (see
+// guestSession(req, true) in src/server/main.ts), so installing the service
+// worker minted four throwaway identities that nothing would ever use.
+// Navigations populate the cache as they happen via networkFirstNavigation()
+// below, which also means a viewer gets offline copies of the pages they
+// actually visit rather than all four regardless.
+const PRECACHE_PAGES = [OFFLINE_URL];
 
 // A fixed-name cache that survives every version — NOT swept on activate —
 // used only to remember the active manifest digest across the browser
@@ -132,12 +139,32 @@ async function staleWhileRevalidate(request) {
 }
 
 /** @param {Request} request @returns {Promise<Response>} */
+/**
+ * Copies a response without its `set-cookie` header, for storing in the
+ * cache. A page route issues a per-visitor guest session cookie, and putting
+ * that straight into the cache store would keep one visitor's session token
+ * sitting in a cache that later loads read from. Browsers do not apply
+ * Set-Cookie from a cached response, so nothing needs it there.
+ * @param {Response} response
+ * @returns {Promise<Response>}
+ */
+async function withoutSetCookie(response) {
+  const headers = new Headers(response.headers);
+  headers.delete("set-cookie");
+  return new Response(await response.clone().arrayBuffer(), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/** @param {Request} request @returns {Promise<Response>} */
 async function networkFirstNavigation(request) {
   try {
     const response = await fetch(request);
     const manifest = await getCurrentManifest();
     const cache = await worker.caches.open(cacheNameFor(manifest));
-    if (response.ok) await cache.put(request, response.clone());
+    if (response.ok) await cache.put(request, await withoutSetCookie(response));
     return response;
   } catch {
     const manifest = await getCurrentManifest();
