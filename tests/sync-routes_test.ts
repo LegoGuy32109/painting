@@ -4,6 +4,7 @@
 // tests/db_test.ts is isolated from the plain unit-test task.
 
 import {
+  assert,
   assertEquals,
   assertMatch,
   assertNotEquals,
@@ -57,6 +58,17 @@ const SESSION_B = (await guestSession(
 
 function cookie(session: GuestSession): string {
   return session.setCookie?.split(";", 1)[0] ?? "";
+}
+
+/**
+ * Adopts a cookie a response reissued, the way a browser would. Needed
+ * wherever a route revokes sessions (session_epoch bump) and hands the
+ * caller a replacement in the same response — reusing the pre-bump session
+ * object afterwards is exactly the stale cookie the bump is meant to kill.
+ */
+function adopt(session: GuestSession, response: Response): GuestSession {
+  const setCookie = response.headers.get("set-cookie");
+  return setCookie ? { ...session, setCookie } : session;
 }
 
 async function dropCanvas(id: string) {
@@ -1025,16 +1037,29 @@ Deno.test("DELETE /api/auth/credentials/:id refuses to remove the last passkey",
       session,
     );
     assertEquals(firstDelete.status, 204);
+    // Removing a passkey revokes every session for the profile, so this
+    // request's own cookie is replaced in the same response.
+    assert(firstDelete.headers.get("set-cookie"));
+    const current = adopt(session, firstDelete);
+
+    // The pre-revocation cookie is dead — that is the entire point of
+    // bumping session_epoch here, and the reason a device whose passkey was
+    // just removed cannot keep mutating.
+    const stale = await remove(
+      `/api/auth/credentials/${credentialB}`,
+      session,
+    );
+    assertEquals(stale.status, 401);
 
     const lastDelete = await remove(
       `/api/auth/credentials/${credentialB}`,
-      session,
+      current,
     );
     assertEquals(lastDelete.status, 400);
 
     const notFound = await remove(
       `/api/auth/credentials/${ulid()}`,
-      session,
+      current,
     );
     assertEquals(notFound.status, 404);
   } finally {
@@ -1080,4 +1105,104 @@ Deno.test("register/options and register/verify 501 when WEBAUTHN_RP_ID/ORIGINS 
   } finally {
     await dropProfile(session.guestId);
   }
+});
+
+Deno.test("POST /api/auth/logout/all revokes every outstanding session for the profile", async () => {
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  // A second cookie for the SAME profile, standing in for the other device
+  // this is supposed to reach. Both were signed under the current epoch.
+  const otherDevice: GuestSession = { ...session };
+
+  // First mutation is what creates the profiles row.
+  assertEquals(
+    (await put(
+      "/api/me/handle",
+      { handle: `Revoke ${ulid().slice(0, 6)}` },
+      session,
+    ))
+      .status,
+    200,
+  );
+  const epochBefore = Number(
+    (await db.execute({
+      sql: "SELECT session_epoch FROM profiles WHERE id = ?",
+      args: [session.guestId],
+    })).rows[0].session_epoch,
+  );
+
+  const res = await post("/api/auth/logout/all", {}, session);
+  assertEquals(res.status, 200);
+
+  const epochAfter = Number(
+    (await db.execute({
+      sql: "SELECT session_epoch FROM profiles WHERE id = ?",
+      args: [session.guestId],
+    })).rows[0].session_epoch,
+  );
+  assertEquals(epochAfter, epochBefore + 1);
+
+  // The other device's cookie is now dead — this is the whole point, and
+  // the thing a plain logout could never do.
+  assertEquals(
+    (await put(
+      "/api/me/handle",
+      { handle: `Nope ${ulid().slice(0, 6)}` },
+      otherDevice,
+    ))
+      .status,
+    401,
+  );
+
+  // The caller is left on a working session, but a brand-new GUEST one:
+  // guest is this app's ground state, and there is deliberately no way back
+  // to the revoked profile without the passkey.
+  const fresh = adopt(session, res);
+  assertNotEquals(cookie(fresh), cookie(session));
+  const afterHandle = `Fresh ${ulid().slice(0, 6)}`;
+  assertEquals(
+    (await put("/api/me/handle", { handle: afterHandle }, fresh)).status,
+    200,
+  );
+  const stillOld = await db.execute({
+    sql: "SELECT handle FROM profiles WHERE id = ?",
+    args: [session.guestId],
+  });
+  assertNotEquals(String(stillOld.rows[0].handle), afterHandle);
+});
+
+Deno.test("POST /api/auth/logout/all requires a session and rejects cross-origin", async () => {
+  assertEquals(
+    (await handler(
+      new Request("http://localhost/api/auth/logout/all", { method: "POST" }),
+    )).status,
+    401,
+  );
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  assertEquals(
+    (await handler(
+      new Request("http://localhost/api/auth/logout/all", {
+        method: "POST",
+        headers: { cookie: cookie(session), origin: "https://evil.example" },
+      }),
+    )).status,
+    403,
+  );
+});
+
+Deno.test("POST /api/auth/logout/all works for a guest that has never mutated anything", async () => {
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  // No profiles row exists — there is nothing to revoke, but the caller
+  // asked to be signed out everywhere and now is.
+  const res = await post("/api/auth/logout/all", {}, session);
+  assertEquals(res.status, 200);
+  assert(res.headers.get("set-cookie"));
 });

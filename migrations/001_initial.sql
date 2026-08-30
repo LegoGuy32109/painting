@@ -82,6 +82,14 @@ CREATE TABLE IF NOT EXISTS webauthn_challenges (
   expires_at  INTEGER NOT NULL
 );
 
+-- createChallenge() sweeps dead rows (WHERE expires_at < ?) on every single
+-- issuance instead of running a cron. Without this index that sweep is a
+-- full table scan, so the cost of issuing a challenge grows with the number
+-- of live challenges -- exactly backwards under the burst this table is most
+-- likely to see.
+CREATE INDEX IF NOT EXISTS webauthn_challenges_expires_idx
+  ON webauthn_challenges(expires_at);
+
 -- Unused until Phase 5 (account transfer between devices) — created now
 -- for the same reason.
 CREATE TABLE IF NOT EXISTS transfer_codes (

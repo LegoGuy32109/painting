@@ -9,12 +9,14 @@
 /** @typedef {import("../shared/paint-types.d.ts").LoginVerifyPendingResponse} LoginVerifyPendingResponse */
 
 import {
+  clearAllLocal,
   deleteCanvasLocal,
   listCachedCompleted,
   openLocalDb,
   seedCanvasHistory,
   upsertCanvasLocal,
 } from "./local-db.js";
+import { flushPendingLocalEvents } from "./sync.js";
 import {
   decodeBase64,
   decodePixels,
@@ -22,10 +24,12 @@ import {
   paintingContext,
 } from "../shared/pixel-render.js";
 import {
+  clearCachedWebauthnIdentity,
   deleteCredential as deletePasskey,
   fetchProfile,
   isPasskeySupported,
   logout,
+  logoutEverywhere,
   registerPasskey,
   renameHandle,
   requestTransferCode,
@@ -779,16 +783,102 @@ function renderAccountView(profile) {
   const signOut = document.createElement("button");
   signOut.type = "button";
   signOut.textContent = "Sign out";
-  signOut.addEventListener("click", () => void handleSignOutClick());
+  signOut.addEventListener(
+    "click",
+    () => void handleSignOutClick(signOut, false),
+  );
   children.push(signOut);
+
+  // The only way to reach a session on a device you no longer have. Guest
+  // cookies last 400 days and there is no server-side session list to
+  // revoke from, so without this the answer to "I think someone else has
+  // my session" was to delete a passkey and hope.
+  const signOutAll = document.createElement("button");
+  signOutAll.type = "button";
+  signOutAll.textContent = "Sign out everywhere";
+  signOutAll.addEventListener("click", () => {
+    if (
+      !confirm(
+        "Sign out on this device and every other device this account is " +
+          "signed in on?\n\nYou'll need your passkey to sign back in.",
+      )
+    ) return;
+    void handleSignOutClick(signOutAll, true);
+  });
+  children.push(signOutAll);
 
   children.push(renderTransferGenerateSection());
 
   accountPanel.replaceChildren(...children);
 }
 
-async function handleSignOutClick() {
-  await logout();
+/**
+ * Signs out, and — the part that used to be missing entirely — tears down
+ * this device's local state on the way.
+ *
+ * Sign-out replaces the cookie server-side, but every scrap of painting
+ * state lives in localStorage and IndexedDB and is not scoped by profile
+ * (it cannot be: the client is never told an owner id). Leaving it in place
+ * meant the next person on this device got the previous profile's
+ * currentCanvasId and its whole local history, which sync.js renders
+ * straight onto the canvas before it has asked the server anything — so a
+ * brand-new guest opened the editor looking at a stranger's painting, until
+ * and unless a round trip happened to correct it.
+ *
+ * Order matters, and it is: drain, then revoke, then erase. Draining first
+ * is why this is async and can fail — unsynced strokes belong to the
+ * profile that is on its way out, and this is the last moment they can ever
+ * reach the server. If they cannot, the user is asked rather than having
+ * the work deleted underneath them.
+ * @param {HTMLButtonElement} button
+ * @param {boolean} everywhere
+ */
+async function handleSignOutClick(button, everywhere) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Saving your work…";
+
+  const { drained, remaining } = await flushPendingLocalEvents().catch(() => ({
+    drained: false,
+    remaining: -1,
+  }));
+  if (!drained) {
+    button.disabled = false;
+    button.textContent = original;
+    const count = remaining > 0 ? `${remaining} ` : "";
+    const proceed = confirm(
+      `${count}unsaved change${remaining === 1 ? "" : "s"} on this device ` +
+        `could not be saved to your account. Signing out will erase ` +
+        `${remaining === 1 ? "it" : "them"} from this device permanently.\n\n` +
+        `Sign out anyway?`,
+    );
+    if (!proceed) return;
+    button.disabled = true;
+    button.textContent = "Signing out…";
+  }
+
+  const ok = everywhere ? await logoutEverywhere() : await logout();
+  if (!ok) {
+    button.disabled = false;
+    button.textContent = original;
+    alert("Could not sign out. Check your connection and try again.");
+    return;
+  }
+
+  // Only after the server has confirmed the profile is off this device.
+  // Erasing first would destroy local work on behalf of a sign-out that
+  // never happened.
+  clearCachedWebauthnIdentity();
+  try {
+    localStorage.removeItem("currentCanvasId");
+  } catch {
+    // Storage denied — the clear below is what actually matters, and
+    // sync.js re-registers a draft with the server on the next editor open
+    // regardless of what this pointer says.
+  }
+  const db = await openLocalDb().catch(() => null);
+  if (db) await clearAllLocal(db).catch(() => {});
+
   // A fresh guest cookie is already set by the response — reloading is
   // the simplest way to get every already-rendered piece of this page
   // (the account panel, any cached collection state) consistent with the

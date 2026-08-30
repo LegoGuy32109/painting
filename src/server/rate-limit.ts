@@ -29,12 +29,18 @@ export function consumeGuestMutation(
     const oldest = buckets.keys().next().value;
     if (oldest !== undefined) buckets.delete(oldest);
   }
+  // A denied request must not spend anything. Clamping a shortfall to zero
+  // instead charged the caller everything it had left, so one rejected
+  // multi-token request (an events push costs 1 + events/8) reset a bucket
+  // that was merely short of THAT request back to empty — and the delete +
+  // re-set below is what keeps this Map in LRU order for the eviction above.
+  const allowed = tokens >= cost;
   buckets.delete(guestId);
   buckets.set(guestId, {
-    tokens: Math.max(0, tokens - cost),
+    tokens: allowed ? tokens - cost : tokens,
     updatedAt: now,
   });
-  return tokens >= cost;
+  return allowed;
 }
 
 // --- IP-keyed limiter (Phase 5: transfer codes) ---------------------------
@@ -78,10 +84,15 @@ export function consumeIpMutation(
     const oldest = ipBuckets.keys().next().value;
     if (oldest !== undefined) ipBuckets.delete(oldest);
   }
+  // Denied requests spend nothing here either — see consumeGuestMutation.
+  // It matters more on this bucket: generation costs 5, so a single
+  // rejected generate used to wipe out the 4 tokens a legitimate consume
+  // (cost 1) would otherwise still have had.
+  const allowed = tokens >= cost;
   ipBuckets.delete(ip);
   ipBuckets.set(ip, {
-    tokens: Math.max(0, tokens - cost),
+    tokens: allowed ? tokens - cost : tokens,
     updatedAt: now,
   });
-  return tokens >= cost;
+  return allowed;
 }

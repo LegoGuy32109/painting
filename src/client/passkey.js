@@ -495,6 +495,41 @@ export async function logout() {
   return res.ok;
 }
 
+/**
+ * Signs out on THIS device and invalidates every other outstanding session
+ * for the profile (server-side: a session_epoch bump — see
+ * POST /api/auth/logout/all). The plain logout() above only replaces this
+ * device's cookie; this is the one that reaches a cookie you no longer have
+ * physical access to.
+ * @returns {Promise<boolean>}
+ */
+export async function logoutEverywhere() {
+  const res = await fetch("/api/auth/logout/all", { method: "POST" });
+  return res.ok;
+}
+
+/**
+ * Forgets the cached WebAuthn rpId/user.id. Both are written once, at
+ * registration, and are keyed to the profile that registered — so they are
+ * wrong the moment the device's profile changes, and nothing used to clear
+ * them.
+ *
+ * Left behind, the stale user.id was actively harmful rather than merely
+ * stale: signalRenamed() below feeds it to signalCurrentUserDetails(), so
+ * after signing out of an account, the NEXT profile on this device renaming
+ * its handle would relabel the SIGNED-OUT account's passkey in the OS
+ * password manager. Sign-out must clear these.
+ */
+export function clearCachedWebauthnIdentity() {
+  try {
+    localStorage.removeItem(RP_ID_KEY);
+    localStorage.removeItem(USER_ID_KEY);
+  } catch {
+    // Storage can be denied; nothing downstream depends on this succeeding
+    // beyond the signal calls, which already no-op without these values.
+  }
+}
+
 // --- Transfer codes (Phase 5) --------------------------------------------
 
 /**
@@ -510,7 +545,10 @@ export async function requestTransferCode() {
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    return { ok: false, message: text || "Could not generate a transfer code." };
+    return {
+      ok: false,
+      message: text || "Could not generate a transfer code.",
+    };
   }
   /** @type {TransferGenerateResponse} */
   const body = await res.json();

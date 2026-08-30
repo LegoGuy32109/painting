@@ -207,6 +207,96 @@ export function deleteCanvasLocal(db, canvasId) {
 }
 
 /**
+ * Every still-unsynced event across EVERY canvas, grouped by canvas id.
+ * listPendingLocalEvents() above answers "what does this canvas still owe
+ * the server," which is all a running editor needs; this answers "does this
+ * device still owe the server anything at all," which is what sign-out has
+ * to know before it is allowed to erase local storage. There is no index
+ * for "pending, any canvas" — the by_canvas_status index is keyed
+ * [canvasId, status] — so this walks the store. That is fine: it runs once,
+ * on an explicit user action, over an outbox that is empty in the normal
+ * case.
+ * @param {IDBDatabase} db
+ * @returns {Promise<Map<string, LocalEventRecord[]>>}
+ */
+export function listAllPendingLocalEvents(db) {
+  return new Promise((resolve, reject) => {
+    /** @type {Map<string, LocalEventRecord[]>} */
+    const byCanvas = new Map();
+    const request = store(db, "local_events", "readonly").openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return resolve(byCanvas);
+      const record = /** @type {LocalEventRecord} */ (cursor.value);
+      if (record.status === "pending") {
+        const existing = byCanvas.get(record.canvasId);
+        if (existing) existing.push(record);
+        else byCanvas.set(record.canvasId, [record]);
+      }
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/**
+ * Moves this canvas's still-unsynced events onto a different canvas id.
+ * Used when the server refuses a preferred draft id (see sync.js's
+ * resolveDraftConflict): the strokes are the user's real work and are still
+ * wanted, but the id they were recorded against turned out to belong to
+ * someone else, so they have to be replayed onto the draft the server
+ * actually granted. Only "pending" events move — a synced event is already
+ * on the server under the old canvas and is not ours to re-push.
+ * @param {IDBDatabase} db @param {string} fromCanvasId @param {string} toCanvasId
+ * @returns {Promise<number>} how many events were moved
+ */
+export function rekeyPendingLocalEvents(db, fromCanvasId, toCanvasId) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("local_events", "readwrite");
+    const index = tx.objectStore("local_events").index("by_canvas_status");
+    let moved = 0;
+    index.openCursor(IDBKeyRange.only([fromCanvasId, "pending"])).onsuccess = (
+      event,
+    ) => {
+      const cursor = /** @type {IDBRequest<IDBCursorWithValue>} */ (
+        event.target
+      ).result;
+      if (!cursor) return;
+      cursor.update({ ...cursor.value, canvasId: toCanvasId });
+      moved++;
+      cursor.continue();
+    };
+    tx.oncomplete = () => resolve(moved);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Empties every store. This is the sign-out teardown: local painting state
+ * is scoped to whoever was signed in, and none of it is scoped BY profile
+ * — there is no owner column on any of these stores, and by design the
+ * client is never told an owner id it could put in one. So the only correct
+ * thing to do when the profile changes out from under it is to drop the lot.
+ * Callers must push anything still pending first (see sync.js's
+ * flushPendingLocalEvents) — this is unconditional destruction.
+ * @param {IDBDatabase} db
+ */
+export function clearAllLocal(db) {
+  const names = [
+    "canvases_local",
+    "canvas_snapshot",
+    "canvas_history",
+    "local_events",
+  ];
+  const tx = db.transaction(names, "readwrite");
+  for (const name of names) tx.objectStore(name).clear();
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve(undefined);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
  * Seeds canvas_history with a canvas's server-side event log — used after
  * a Phase 4 sign-in/merge adopts a draft this device has never painted on
  * locally (the account's pre-existing draft, kept over the device's own),

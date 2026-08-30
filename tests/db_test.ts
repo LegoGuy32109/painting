@@ -9,6 +9,7 @@ import {
   createDb,
   deleteCompletedCanvas,
   deleteCredential,
+  deleteGuestDraft,
   ensureProfile,
   getCompletedCanvas,
   getOrCreateDraft,
@@ -112,8 +113,15 @@ Deno.test("migrateDatabase() is idempotent", async () => {
   await migrateDatabase(db);
 });
 
-Deno.test("foreign key CASCADE removes events when their canvas is deleted", async () => {
-  const canvasId = await makeCanvas();
+async function eventCount(canvasId: string): Promise<number> {
+  const res = await db.execute({
+    sql: "SELECT count(*) as n FROM canvas_events WHERE canvas_id = ?",
+    args: [canvasId],
+  });
+  return Number(res.rows[0].n);
+}
+
+async function seedEvent(canvasId: string): Promise<void> {
   await appendEvents(
     dbUrl,
     dbToken,
@@ -122,17 +130,93 @@ Deno.test("foreign key CASCADE removes events when their canvas is deleted", asy
     true,
     Date.now(),
   );
+}
 
-  const before = await pullEventsSince(db, canvasId, 0);
-  assertEquals(before.events.length, 1);
+// These run with foreign_keys explicitly OFF, which is not a contrived
+// setup — it is what a serving instance actually has. The pragma is
+// per-connection and defaults to off; migrateDatabase() turns it on for its
+// own connection at the top of this file, and an earlier version of this
+// test then "proved" ON DELETE CASCADE by deleting a canvas row directly on
+// that same connection. The schema's cascade was real; it just never ran in
+// production, which quietly accumulated 768 orphaned canvas_events rows
+// against 14 live canvases before anyone looked. The invariant worth
+// testing is that the app's own delete paths clean up regardless.
+Deno.test("deleting a completed canvas removes its events with foreign keys off", async () => {
+  await db.execute("PRAGMA foreign_keys = OFF");
+  try {
+    const canvasId = await makeCanvas();
+    const owner = String(
+      (await db.execute({
+        sql: "SELECT owner_id FROM canvases WHERE id = ?",
+        args: [canvasId],
+      })).rows[0].owner_id,
+    );
+    await seedEvent(canvasId);
+    assertEquals(await eventCount(canvasId), 1);
 
-  await dropCanvas(canvasId);
+    await completeCanvas(db, canvasId, "Done", Date.now());
+    assertEquals(await deleteCompletedCanvas(db, canvasId, owner), true);
+    assertEquals(await eventCount(canvasId), 0);
+  } finally {
+    await db.execute("PRAGMA foreign_keys = ON");
+  }
+});
 
-  const after = await db.execute({
-    sql: "SELECT count(*) as n FROM canvas_events WHERE canvas_id = ?",
-    args: [canvasId],
-  });
-  assertEquals(Number(after.rows[0].n), 0);
+Deno.test("deleting a draft removes its events with foreign keys off", async () => {
+  await db.execute("PRAGMA foreign_keys = OFF");
+  const owner = `draft-delete-${ulid()}`;
+  try {
+    const draft = await getOrCreateDraft(
+      db,
+      ulid(),
+      owner,
+      emptyPixels(),
+      Date.now(),
+    );
+    await seedEvent(draft.id);
+    assertEquals(await eventCount(draft.id), 1);
+
+    assertEquals(await deleteGuestDraft(db, owner), true);
+    assertEquals(await eventCount(draft.id), 0);
+  } finally {
+    await db.execute("PRAGMA foreign_keys = ON");
+  }
+});
+
+// The dependent delete has to repeat the canvas delete's own predicate.
+// Without that, a DELETE that legitimately matches nothing still reaches
+// the events table — turning "you don't own this, request rejected" into
+// "your painting's history is gone."
+Deno.test("a rejected canvas delete leaves the owner's events untouched", async () => {
+  await db.execute("PRAGMA foreign_keys = OFF");
+  let canvasId = "";
+  try {
+    canvasId = await makeCanvas();
+    const owner = String(
+      (await db.execute({
+        sql: "SELECT owner_id FROM canvases WHERE id = ?",
+        args: [canvasId],
+      })).rows[0].owner_id,
+    );
+    await seedEvent(canvasId);
+    await completeCanvas(db, canvasId, "Done", Date.now());
+
+    assertEquals(
+      await deleteCompletedCanvas(db, canvasId, "someone-else"),
+      false,
+    );
+    assertEquals(await eventCount(canvasId), 1);
+
+    // Someone else's draft-delete must not touch it either.
+    assertEquals(await deleteGuestDraft(db, "someone-else"), false);
+    assertEquals(await eventCount(canvasId), 1);
+
+    assertEquals(await deleteCompletedCanvas(db, canvasId, owner), true);
+    assertEquals(await eventCount(canvasId), 0);
+  } finally {
+    await db.execute("PRAGMA foreign_keys = ON");
+    if (canvasId) await dropCanvas(canvasId);
+  }
 });
 
 Deno.test("CHECK constraint rejects an invalid event kind", async () => {

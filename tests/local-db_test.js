@@ -7,16 +7,32 @@ import "npm:fake-indexeddb@6.2.5/auto";
 import { assertEquals } from "@std/assert";
 import {
   appendLocalEvent,
+  clearAllLocal,
   deleteCanvasLocal,
   getFullHistory,
   getSnapshot,
+  listAllPendingLocalEvents,
   listCachedCompleted,
   listPendingLocalEvents,
   markSyncedAndGraduate,
   openLocalDb,
   putSnapshot,
+  rekeyPendingLocalEvents,
   upsertCanvasLocal,
 } from "../src/client/local-db.js";
+
+/** @param {IDBDatabase} db @param {string} canvasId @param {string} id */
+function pendingEvent(db, canvasId, id) {
+  return appendLocalEvent(db, {
+    id,
+    canvasId,
+    kind: "stroke",
+    strokeId: id,
+    cells: null,
+    revertsId: null,
+    clientTs: 1,
+  });
+}
 
 Deno.test("canvas_snapshot round-trips baseSequence", async () => {
   const db = await openLocalDb();
@@ -282,5 +298,110 @@ Deno.test("the v3 upgrade rebuilds every object store from scratch, dropping old
     ["fresh-after-upgrade"],
   );
   await deleteCanvasLocal(db, "fresh-after-upgrade");
+  db.close();
+});
+
+Deno.test("listAllPendingLocalEvents groups every canvas's outbox, and only pending events", async () => {
+  const db = await openLocalDb();
+  await clearAllLocal(db);
+  await pendingEvent(db, "canvas-a", "a1");
+  await pendingEvent(db, "canvas-a", "a2");
+  await pendingEvent(db, "canvas-b", "b1");
+  const syncedKey = await pendingEvent(db, "canvas-a", "a3");
+  await markSyncedAndGraduate(
+    db,
+    [{ localKey: syncedKey, sequence: 1 }],
+    "canvas-a",
+    false,
+  );
+
+  const byCanvas = await listAllPendingLocalEvents(db);
+  assertEquals([...byCanvas.keys()].sort(), ["canvas-a", "canvas-b"]);
+  // a3 was acknowledged and must not be offered for re-push.
+  assertEquals(byCanvas.get("canvas-a")?.map((e) => e.id), ["a1", "a2"]);
+  assertEquals(byCanvas.get("canvas-b")?.map((e) => e.id), ["b1"]);
+  db.close();
+});
+
+Deno.test("listAllPendingLocalEvents reports an empty outbox as an empty map", async () => {
+  const db = await openLocalDb();
+  await clearAllLocal(db);
+  assertEquals((await listAllPendingLocalEvents(db)).size, 0);
+  db.close();
+});
+
+Deno.test("rekeyPendingLocalEvents moves pending events to the granted draft id", async () => {
+  const db = await openLocalDb();
+  await clearAllLocal(db);
+  await pendingEvent(db, "refused-id", "e1");
+  await pendingEvent(db, "refused-id", "e2");
+  await pendingEvent(db, "untouched", "e3");
+
+  const moved = await rekeyPendingLocalEvents(db, "refused-id", "granted-id");
+  assertEquals(moved, 2);
+  assertEquals(await listPendingLocalEvents(db, "refused-id"), []);
+  assertEquals(
+    (await listPendingLocalEvents(db, "granted-id")).map((e) => e.id),
+    ["e1", "e2"],
+  );
+  // Another canvas's outbox is not collateral damage.
+  assertEquals(
+    (await listPendingLocalEvents(db, "untouched")).map((e) => e.id),
+    ["e3"],
+  );
+  db.close();
+});
+
+Deno.test("rekeyPendingLocalEvents leaves already-synced events on the old canvas", async () => {
+  const db = await openLocalDb();
+  await clearAllLocal(db);
+  const key = await pendingEvent(db, "old-id", "synced");
+  // keepHistory: true so the event survives as history rather than being
+  // deleted outright — the case where "synced" is observable at all.
+  await markSyncedAndGraduate(
+    db,
+    [{ localKey: key, sequence: 7 }],
+    "old-id",
+    true,
+  );
+  await pendingEvent(db, "old-id", "unsynced");
+
+  assertEquals(await rekeyPendingLocalEvents(db, "old-id", "new-id"), 1);
+  assertEquals(
+    (await listPendingLocalEvents(db, "new-id")).map((e) => e.id),
+    ["unsynced"],
+  );
+  // The synced event is on the server under the OLD canvas; re-pushing it
+  // under a new one would duplicate it.
+  assertEquals((await getFullHistory(db, "old-id")).map((e) => e.id), [
+    "synced",
+  ]);
+  assertEquals(await getFullHistory(db, "new-id"), []);
+  db.close();
+});
+
+Deno.test("clearAllLocal empties every store, not just one canvas", async () => {
+  const db = await openLocalDb();
+  await pendingEvent(db, "c1", "keep-me");
+  await putSnapshot(db, {
+    canvasId: "c1",
+    pixels: new Uint8Array(4),
+    baseSequence: 1,
+    updatedAt: 1,
+  });
+  await upsertCanvasLocal(db, {
+    id: "c2",
+    title: "Signed",
+    completedAt: 2,
+    pixels: new Uint8Array(4),
+    createdAt: 1,
+  });
+
+  await clearAllLocal(db);
+
+  assertEquals((await listAllPendingLocalEvents(db)).size, 0);
+  assertEquals(await getSnapshot(db, "c1"), undefined);
+  assertEquals(await listCachedCompleted(db), []);
+  assertEquals(await getFullHistory(db, "c1"), []);
   db.close();
 });

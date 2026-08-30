@@ -489,6 +489,15 @@ export async function mergeProfiles(
     },
   ];
   if (params.discardDraftId) {
+    // Same EXISTS guard, same reason, as deleteCompletedCanvas() above: the
+    // events go first but only if the canvas delete below will actually
+    // match, so a draft that was signed between the merge decision and this
+    // write keeps its history instead of being silently gutted.
+    statements.push({
+      sql: "DELETE FROM canvas_events WHERE canvas_id = ? AND EXISTS (" +
+        "SELECT 1 FROM canvases WHERE id = ? AND completed_at IS NULL)",
+      args: [params.discardDraftId, params.discardDraftId],
+    });
     statements.push({
       sql: "DELETE FROM canvases WHERE id = ? AND completed_at IS NULL",
       args: [params.discardDraftId],
@@ -809,28 +818,64 @@ export async function getCompletedCanvas(
   return result.rows.length === 0 ? null : rowToRecord(result.rows[0]);
 }
 
+// --- Deleting a canvas ----------------------------------------------------
+//
+// `canvas_events.canvas_id` declares REFERENCES canvases(id) ON DELETE
+// CASCADE, but that cascade NEVER fires for a serving instance and must not
+// be relied on. SQLite's foreign_keys pragma is off by default and is
+// per-connection: migrations.ts turns it on for its own migration
+// connection, which does nothing for the app's. We cannot simply turn it on
+// in createDb() either — getDb() is synchronous and used from ~60 call
+// sites, so a pragma issued there races the first query, and the
+// fetch()-based Turso client may transparently re-establish its stream and
+// silently drop the setting anyway.
+//
+// So every delete below removes the dependent canvas_events rows itself, in
+// the SAME batch as the canvas row, and each dependent delete repeats the
+// ownership/state predicate of the canvas delete via EXISTS. That guard is
+// load-bearing: without it, a DELETE that matches no canvas (wrong owner, or
+// already signed) would still wipe that canvas's event history — turning a
+// rejected request into cross-owner data destruction.
+//
+// This was not theoretical: before this change, dev held 768 orphaned
+// canvas_events rows against 14 live canvases.
+
 export async function deleteCompletedCanvas(
   db: Client,
   canvasId: string,
   ownerId: string,
 ): Promise<boolean> {
-  const result = await db.execute({
-    sql:
-      "DELETE FROM canvases WHERE id = ? AND owner_id = ? AND completed_at IS NOT NULL",
-    args: [canvasId, ownerId],
-  });
-  return result.rowsAffected === 1;
+  const results = await db.batch([
+    {
+      sql: "DELETE FROM canvas_events WHERE canvas_id = ? AND EXISTS (" +
+        "SELECT 1 FROM canvases WHERE id = ? AND owner_id = ? AND completed_at IS NOT NULL)",
+      args: [canvasId, canvasId, ownerId],
+    },
+    {
+      sql:
+        "DELETE FROM canvases WHERE id = ? AND owner_id = ? AND completed_at IS NOT NULL",
+      args: [canvasId, ownerId],
+    },
+  ], "write");
+  return results[1].rowsAffected === 1;
 }
 
 export async function deleteGuestDraft(
   db: Client,
   ownerId: string,
 ): Promise<boolean> {
-  const result = await db.execute({
-    sql: "DELETE FROM canvases WHERE owner_id = ? AND completed_at IS NULL",
-    args: [ownerId],
-  });
-  return result.rowsAffected === 1;
+  const results = await db.batch([
+    {
+      sql: "DELETE FROM canvas_events WHERE canvas_id IN (" +
+        "SELECT id FROM canvases WHERE owner_id = ? AND completed_at IS NULL)",
+      args: [ownerId],
+    },
+    {
+      sql: "DELETE FROM canvases WHERE owner_id = ? AND completed_at IS NULL",
+      args: [ownerId],
+    },
+  ], "write");
+  return results[1].rowsAffected === 1;
 }
 
 /**

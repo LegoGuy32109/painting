@@ -46,6 +46,11 @@ async function readMigrations(): Promise<Migration[]> {
  * deployment operation, never something a serving instance performs.
  */
 export async function migrateDatabase(db: Client): Promise<string[]> {
+  // Scoped to THIS migration connection only — SQLite's foreign_keys
+  // pragma is per-connection, so this says nothing about what a serving
+  // instance sees. The app deliberately does not depend on it; see the
+  // "Deleting a canvas" note in db.ts for why every delete removes its own
+  // dependent rows instead.
   await db.execute("PRAGMA foreign_keys = ON");
   await db.execute(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at INTEGER NOT NULL)",

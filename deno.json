@@ -13,6 +13,7 @@
     "test:e2e:carousel:headed": "deno run --env-file -A scripts/carousel-e2e.ts --headed",
     "test:e2e:reduced-motion": "deno run --env-file -A scripts/e2e-reduced-motion.ts",
     "test:e2e:passkey": "deno run --env-file -A scripts/e2e-passkey.ts",
+    "test:e2e:signout": "deno run --env-file -A scripts/e2e-signout-teardown.ts",
     "test:e2e:transfer": "deno run --env-file -A scripts/e2e-transfer.ts",
     "test:e2e:merge-dialog": "deno run --env-file -A scripts/e2e-merge-dialog.ts",
     "test:e2e:sw-update": "deno run --env-file -A scripts/e2e-sw-update.ts",

@@ -1,5 +1,6 @@
 import {
   appendEvents,
+  bumpSessionEpoch,
   type CanvasEventRow,
   type CanvasRecord,
   type CanvasSummary,
@@ -311,13 +312,32 @@ function ensurePolling(canvasId: string): void {
 const TRANSFER_CODE_TTL_MS = 10 * 60 * 1000;
 const TRANSFER_GENERATE_IP_COST = 5;
 const TRANSFER_CONSUME_IP_COST = 1;
+// The passkey sign-in surface, IP-keyed for the same reason the transfer
+// routes are (see rate-limit.ts): neither route requires a session, so a
+// guest-keyed bucket is no bucket at all — POST /api/auth/login/options
+// needs no cookie whatsoever and writes a webauthn_challenges row on every
+// call, and login/verify runs public-key verification plus several reads.
+// Cost 1 each against the shared IP bucket: a burst of 20, then ~4/minute
+// sustained, which is far more sign-in attempts than a real person makes
+// and no longer an unmetered write amplifier.
+const LOGIN_OPTIONS_IP_COST = 1;
+const LOGIN_VERIFY_IP_COST = 1;
 
 const ensuredCanvases = new Set<string>();
 // Mirrors ensuredCanvases: the events POST route is the high-frequency
 // mutation (one push per sync interval while painting), so profile
 // creation there is gated the same way canvas creation already is,
 // rather than re-upserting on every single push.
-const ensuredProfiles = new Set<string>();
+//
+// Unlike ensuredCanvases this memo EXPIRES, and that matters now that
+// session_epoch is a live revocation mechanism rather than dormant
+// machinery. Memoizing forever meant a painter already mid-session was
+// never re-checked, so revoking a passkey could not evict the one caller
+// pushing writes every few seconds — the exact caller revocation is for.
+// A 30s entry bounds that lag to one sweep of the sync interval while
+// still collapsing ~7 of every 8 pushes onto no profile query at all.
+const PROFILE_RECHECK_INTERVAL_MS = 30_000;
+const ensuredProfiles = new Map<string, number>();
 let displayFeedCache:
   | { expiresAt: number; response: DisplayFeedResponse }
   | null = null;
@@ -351,7 +371,9 @@ function assertSessionEpoch(
 }
 
 /** One draft's summary for the Phase 4 merge dialog — see DraftMergeSummary. */
-async function draftMergeSummary(canvas: CanvasRecord): Promise<DraftMergeSummary> {
+async function draftMergeSummary(
+  canvas: CanvasRecord,
+): Promise<DraftMergeSummary> {
   const { events } = await pullEventsSince(getDb(), canvas.id, 0);
   const pixels = composeCanvas(events);
   return {
@@ -989,7 +1011,11 @@ async function route(req: Request, ip: string): Promise<Response> {
         headers: { "retry-after": "1" },
       });
     }
-    const epochProfile = await ensureProfile(getDb(), session.guestId, Date.now());
+    const epochProfile = await ensureProfile(
+      getDb(),
+      session.guestId,
+      Date.now(),
+    );
     assertSessionEpoch(session, epochProfile);
     const result = await deleteCredential(
       getDb(),
@@ -1005,10 +1031,35 @@ async function route(req: Request, ip: string): Promise<Response> {
         { status: 400 },
       );
     }
-    return new Response(null, {
-      status: 204,
-      headers: { "cache-control": "private, no-store" },
-    });
+    // Removing a passkey is the one gesture in this product that means "I
+    // no longer trust something that could get into this account," so it
+    // has to invalidate the sessions that passkey established, not just
+    // the credential itself. Without this the removed passkey's device
+    // keeps a cookie that is good for the full 400-day max-age and there
+    // is no way to reach it — there are no server-side sessions to
+    // delete, only signed cookies, and session_epoch is the only thing
+    // that can outrank one.
+    //
+    // This device is signing itself out too, so it gets a cookie re-minted
+    // at the new epoch in this same response; every OTHER cookie for the
+    // profile still carries the old one and dies on its next mutation.
+    await bumpSessionEpoch(getDb(), session.guestId);
+    const revoked = await getProfile(getDb(), session.guestId);
+    if (!revoked) {
+      throw new HttpError(500, "profile disappeared during revocation");
+    }
+    const reissued = await issueSessionFor(
+      req,
+      revoked.id,
+      revoked.sessionEpoch,
+    );
+    return withSessionCookie(
+      new Response(null, {
+        status: 204,
+        headers: { "cache-control": "private, no-store" },
+      }),
+      reissued,
+    );
   }
 
   // --- Phase 4: passkey sign-in and draft merge --------------------------
@@ -1016,6 +1067,12 @@ async function route(req: Request, ip: string): Promise<Response> {
   if (url.pathname === "/api/auth/login/options" && req.method === "POST") {
     assertSameOrigin(req);
     const rp = requireRelyingParty(req);
+    if (!consumeIpMutation(ip, LOGIN_OPTIONS_IP_COST)) {
+      return new Response("too many requests", {
+        status: 429,
+        headers: { "retry-after": "15" },
+      });
+    }
     const now = Date.now();
     // NO allowCredentials: there is no username in this product, so
     // sign-in relies entirely on discoverable credentials — the
@@ -1042,6 +1099,12 @@ async function route(req: Request, ip: string): Promise<Response> {
   if (url.pathname === "/api/auth/login/verify" && req.method === "POST") {
     assertSameOrigin(req);
     const rp = requireRelyingParty(req);
+    if (!consumeIpMutation(ip, LOGIN_VERIFY_IP_COST)) {
+      return new Response("too many requests", {
+        status: 429,
+        headers: { "retry-after": "15" },
+      });
+    }
     const now = Date.now();
     const body = await readJsonBody(req) as { credential?: unknown };
     const credential = body.credential as
@@ -1108,7 +1171,9 @@ async function route(req: Request, ip: string): Promise<Response> {
           publicKey: stored.publicKey as Uint8Array<ArrayBuffer>,
           counter: stored.counter,
           transports: stored.transports as
-            | Parameters<typeof verifyAuthenticationResponse>[0]["credential"]["transports"]
+            | Parameters<
+              typeof verifyAuthenticationResponse
+            >[0]["credential"]["transports"]
             | undefined,
         },
       });
@@ -1224,6 +1289,55 @@ async function route(req: Request, ip: string): Promise<Response> {
         headers: { "cache-control": "private, no-store" },
       }),
       session,
+    );
+  }
+
+  // "Sign out everywhere." Bumps session_epoch, which is the ONLY thing
+  // that can invalidate a cookie this server has already signed: there is
+  // no session table to delete rows from, and a guest cookie's max-age is
+  // 400 days. Every outstanding cookie for this profile — including the
+  // one that sent this request — carries the old epoch baked into its
+  // signed payload, so each fails its next mutation and is forced back to
+  // a fresh guest.
+  //
+  // Available to guests as well as accounts, deliberately: a transfer code
+  // (Phase 5) puts a guest profile on several devices too, so "guests only
+  // ever have one device" has not been true since that shipped. Not gated
+  // behind requireRelyingParty() for the same reason credential deletion
+  // isn't — revoking your own sessions performs no WebAuthn ceremony, and
+  // the moment you most need it is the moment you can't complete one.
+  if (url.pathname === "/api/auth/logout/all" && req.method === "POST") {
+    assertSameOrigin(req);
+    const session = await guestSession(req, false);
+    if (!session) throw new HttpError(401, "guest session required");
+    if (!consumeGuestMutation(session.guestId)) {
+      return new Response("too many write requests", {
+        status: 429,
+        headers: { "retry-after": "1" },
+      });
+    }
+    const profile = await getProfile(getDb(), session.guestId);
+    // No profile row means this guest has never mutated anything, so there
+    // is nothing anywhere to revoke. Fall through to the same fresh-guest
+    // response rather than 404ing: the caller asked to be signed out
+    // everywhere, and it now is.
+    if (profile) {
+      assertSessionEpoch(session, profile);
+      await bumpSessionEpoch(getDb(), profile.id);
+      // Drop the per-process memo so the recheck window (see
+      // PROFILE_RECHECK_INTERVAL_MS) doesn't keep honouring the old epoch
+      // on THIS instance for another 30 seconds. Other instances still
+      // have their own memos; the interval is what bounds them.
+      ensuredProfiles.delete(profile.id);
+    }
+    const freshGuestId = crypto.randomUUID();
+    const session2 = await issueSessionFor(req, freshGuestId, 0);
+    const response: LogoutResponse = { ok: true };
+    return withSessionCookie(
+      Response.json(response, {
+        headers: { "cache-control": "private, no-store" },
+      }),
+      session2,
     );
   }
 
@@ -1387,7 +1501,11 @@ async function route(req: Request, ip: string): Promise<Response> {
     // Lazy profile row creation: the FIRST mutation for a guest is where
     // its `profiles` row is born — never on a page load. See db.ts's
     // ensureProfile() and the Phase 2 notes in migrations/001_initial.sql.
-    const epochProfile = await ensureProfile(getDb(), session.guestId, Date.now());
+    const epochProfile = await ensureProfile(
+      getDb(),
+      session.guestId,
+      Date.now(),
+    );
     assertSessionEpoch(session, epochProfile);
     const draft = await getOrCreateDraft(
       getDb(),
@@ -1414,7 +1532,11 @@ async function route(req: Request, ip: string): Promise<Response> {
         headers: { "retry-after": "1" },
       });
     }
-    const epochProfile = await ensureProfile(getDb(), session.guestId, Date.now());
+    const epochProfile = await ensureProfile(
+      getDb(),
+      session.guestId,
+      Date.now(),
+    );
     assertSessionEpoch(session, epochProfile);
     await deleteGuestDraft(getDb(), session.guestId);
     return new Response(null, { status: 204 });
@@ -1435,7 +1557,11 @@ async function route(req: Request, ip: string): Promise<Response> {
         headers: { "retry-after": "1" },
       });
     }
-    const epochProfile = await ensureProfile(getDb(), session.guestId, Date.now());
+    const epochProfile = await ensureProfile(
+      getDb(),
+      session.guestId,
+      Date.now(),
+    );
     assertSessionEpoch(session, epochProfile);
     const deleted = await deleteCompletedCanvas(
       getDb(),
@@ -1663,17 +1789,14 @@ async function route(req: Request, ip: string): Promise<Response> {
     }
     const now = Date.now();
 
-    if (!ensuredProfiles.has(session.guestId)) {
+    const lastChecked = ensuredProfiles.get(session.guestId);
+    if (
+      lastChecked === undefined ||
+      now - lastChecked >= PROFILE_RECHECK_INTERVAL_MS
+    ) {
       const profile = await ensureProfile(getDb(), session.guestId, now);
-      // Only checked the FIRST time per process for this guest, same as
-      // ensureProfile()'s own last_seen_at touch above it — see
-      // ensuredProfiles' doc comment. A session_epoch bump that lands
-      // between two pushes from an already-warm process isn't caught
-      // until the process restarts or this guest's memo entry is
-      // otherwise cleared; that's a deliberate, documented gap traded for
-      // not adding a query to the hottest mutation path in the app.
       assertSessionEpoch(session, profile);
-      ensuredProfiles.add(session.guestId);
+      ensuredProfiles.set(session.guestId, now);
     }
 
     if (!ensuredCanvases.has(canvasId)) {
