@@ -12,10 +12,12 @@ import {
   appendLocalEvent,
   deleteCanvasLocal,
   getFullHistory,
+  listAllPendingLocalEvents,
   listPendingLocalEvents,
   markSyncedAndGraduate,
   openLocalDb,
-} from "./local-db.js?v=3";
+  rekeyPendingLocalEvents,
+} from "./local-db.js";
 import { localUlid } from "../shared/ulid.js";
 import { encodeCells } from "../shared/cell-codec.js";
 import { composeCanvas } from "../shared/compose.js";
@@ -72,6 +74,77 @@ function bytesToBase64(bytes) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary);
+}
+
+/**
+ * Pushes every still-unsynced event this device holds, across all canvases,
+ * and reports whether the outbox ended up empty.
+ *
+ * Standalone on purpose: it is called from /collection's sign-out, where no
+ * editor — and therefore no initSync() drain loop — exists at all, but
+ * where local storage is about to be erased. Sign-out must not silently
+ * throw away strokes the server has never seen.
+ *
+ * One pass, no retry loop and no backoff: the caller is a person waiting on
+ * a button, so a failure here has to surface as "we could not save your
+ * work, decide what you want to do" rather than as a spinner that retries
+ * for a minute. A 4xx (a canvas this profile no longer owns) is permanent
+ * and counts as failure too — those events can never be pushed, which is
+ * precisely what the caller needs to be told before erasing them.
+ * @returns {Promise<{ drained: boolean, remaining: number }>}
+ */
+export async function flushPendingLocalEvents() {
+  const db = await openLocalDb().catch(() => null);
+  if (!db) return { drained: true, remaining: 0 };
+  let remaining = 0;
+  const byCanvas = await listAllPendingLocalEvents(db).catch(() => null);
+  if (!byCanvas) return { drained: false, remaining: -1 };
+
+  for (const [canvasId, events] of byCanvas) {
+    for (let offset = 0; offset < events.length; offset += MAX_PUSH_EVENTS) {
+      const batch = events.slice(offset, offset + MAX_PUSH_EVENTS);
+      try {
+        const res = await fetch(`/canvases/${canvasId}/events`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            events: batch.map((event) => ({
+              id: event.id,
+              kind: event.kind,
+              strokeId: event.strokeId,
+              cells: event.cells ? bytesToBase64(event.cells) : null,
+              revertsId: event.revertsId,
+              clientTs: event.clientTs,
+            })),
+            heartbeatActive: false,
+          }),
+        });
+        if (!res.ok) {
+          remaining += events.length - offset;
+          break;
+        }
+        const body = /** @type {PushEventsResponse} */ (await res.json());
+        const bySequence = new Map(
+          body.acknowledgments.map((ack) => [ack.id, ack.sequence]),
+        );
+        const acked = batch.flatMap((event) => {
+          const sequence = bySequence.get(event.id);
+          // A record read back out of the outbox always carries its
+          // autoIncrement key; the type allows undefined only because the
+          // same shape is used for not-yet-stored events on the way in.
+          return sequence === undefined || event.localKey === undefined
+            ? []
+            : [{ localKey: event.localKey, sequence }];
+        });
+        await markSyncedAndGraduate(db, acked, canvasId, false);
+        remaining += batch.length - acked.length;
+      } catch {
+        remaining += events.length - offset;
+        break;
+      }
+    }
+  }
+  return { drained: remaining === 0, remaining };
 }
 
 /**
@@ -571,7 +644,32 @@ export function initSync(canvasElement, onStatus = () => {}) {
       body: JSON.stringify({ id: conflict.localId }),
     });
     if (!registered.ok) return false;
-    canvasId = conflict.localId;
+    // Use the id the server GRANTED, never the one we asked for. Deleting
+    // our own draft above usually frees the preferred id, so it is normally
+    // granted — but not when that id already belongs to a DIFFERENT
+    // profile, which is exactly the state a device is in after signing out
+    // with local work still on it. Assuming the preferred id was accepted
+    // pointed the editor at a canvas this profile does not own, and every
+    // subsequent push 403'd forever with the user's strokes stuck in the
+    // outbox. acceptedPreferredId exists to tell us this; honour it.
+    const result = /** @type {EnsureDraftResponse} */ (await registered.json());
+    const grantedId = result.draft.id;
+    if (grantedId !== conflict.localId) {
+      const db2 = await dbPromise;
+      if (db2) {
+        // The strokes are still the user's work and still wanted — replay
+        // them onto the draft we actually got. The old canvas's synced
+        // history is not ours to keep: it describes a canvas owned by
+        // someone else, and leaving it behind is what renders a stranger's
+        // painting into this editor on the next load.
+        await rekeyPendingLocalEvents(db2, conflict.localId, grantedId);
+        await deleteCanvasLocal(db2, conflict.localId);
+      }
+      for (const event of memoryEvents) {
+        if (event.canvasId === conflict.localId) event.canvasId = grantedId;
+      }
+    }
+    canvasId = grantedId;
     storeValue("currentCanvasId", canvasId);
     canvasElement.setAttribute("canvas-id", canvasId);
     draftConflict = null;

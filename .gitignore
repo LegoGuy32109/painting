@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 backups/
+test-results/
 
 # Secrets - .env.example stays committed, .env never does
 .env
@@ -26,3 +27,7 @@ backups/
 *.njsproj
 *.sln
 *.sw?
+
+# A .env backup written by scripts/env-fill.ts — holds the same real
+# secrets .env does and must never be committable.
+.env.backup-*

@@ -35,9 +35,11 @@ class SiteNav extends HTMLElement {
       a { color:inherit; text-decoration:none; }
       .brand { font-size:clamp(.75rem,2.5vw,1rem); white-space:nowrap; }
       .links { display:flex; align-items:center; justify-content:flex-end; gap:clamp(.35rem,2vw,1rem); font-family:ui-monospace,monospace; font-size:clamp(.72rem,2.4vw,.9rem); }
-      .links a { padding:.5rem .25rem; border-bottom:.1875rem solid transparent; }
-      .links a[aria-current="page"] { border-color:var(--mc-blue,#3c44aa); }
-      a:focus-visible { outline:.1875rem solid var(--mc-blue,#3c44aa); outline-offset:.125rem; }
+      .links a { padding:.55rem .65rem; border:.125rem solid transparent; }
+      .links a:hover { border-color:#000; background:#858585; color:#f9fffe; box-shadow:inset .125rem .125rem #aaa,inset -.125rem -.125rem #2b2b2b; text-shadow:.125rem .125rem #2b2b2b; }
+      .links a[aria-current="page"] { border-color:#000; background:var(--ui-selected-face,#5965d6); color:#f9fffe; box-shadow:inset .125rem .125rem #7c85e7,inset -.125rem -.125rem #2a347f; text-shadow:.125rem .125rem #2a347f; }
+      .links a[aria-current="page"]:hover { background:#6873df; }
+      a:focus-visible { outline:.1875rem solid var(--ui-selected,#3ab3da); outline-offset:.125rem; }
       @media (max-width:34rem) { nav { align-items:flex-start; flex-direction:column; gap:.2rem; padding-bottom:.75rem; } .links { width:100%; justify-content:space-between; } }
     `;
     root.append(style, nav);

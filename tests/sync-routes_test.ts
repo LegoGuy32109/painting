@@ -3,7 +3,13 @@
 // tests/main_test.ts (which requires no net/env perms) the same way
 // tests/db_test.ts is isolated from the plain unit-test task.
 
-import { assertEquals } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertMatch,
+  assertNotEquals,
+  assertStringIncludes,
+} from "@std/assert";
 import { handler } from "../src/server/main.ts";
 import { createDb } from "../src/server/db.ts";
 import { ulid } from "../src/shared/ulid.js";
@@ -12,12 +18,25 @@ import {
   type GuestSession,
   guestSession,
 } from "../src/server/guest-session.ts";
+import { base64Url } from "../src/server/signing-keys.ts";
 
 if (!Deno.env.get("GUEST_SESSION_SECRET")) {
   Deno.env.set(
     "GUEST_SESSION_SECRET",
     "test-only-guest-session-secret-32-bytes",
   );
+}
+if (!Deno.env.get("PAINTING_KEYS")) {
+  Deno.env.set(
+    "PAINTING_KEYS",
+    `routes:${base64Url(crypto.getRandomValues(new Uint8Array(32)))}`,
+  );
+}
+
+// Exercises the /dev/api/active and /dev/api/completed diagnostic routes
+// directly, which are gated behind PAINTING_E2E outside of e2e runs.
+if (!Deno.env.get("PAINTING_E2E")) {
+  Deno.env.set("PAINTING_E2E", "1");
 }
 
 function cellsBase64(cells: Array<[number, number]>): string {
@@ -39,6 +58,17 @@ const SESSION_B = (await guestSession(
 
 function cookie(session: GuestSession): string {
   return session.setCookie?.split(";", 1)[0] ?? "";
+}
+
+/**
+ * Adopts a cookie a response reissued, the way a browser would. Needed
+ * wherever a route revokes sessions (session_epoch bump) and hands the
+ * caller a replacement in the same response — reusing the pre-bump session
+ * object afterwards is exactly the stale cookie the bump is meant to kill.
+ */
+function adopt(session: GuestSession, response: Response): GuestSession {
+  const setCookie = response.headers.get("set-cookie");
+  return setCookie ? { ...session, setCookie } : session;
 }
 
 async function dropCanvas(id: string) {
@@ -297,6 +327,200 @@ Deno.test("sign atomically sets completion and rejects later strokes", async () 
   }
 });
 
+Deno.test("author is server-derived from the signer's own profile; a client-supplied author field is ignored, not honoured", async () => {
+  const canvasId = ulid();
+  try {
+    await put("/api/me/draft", { id: canvasId });
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[0, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+
+    // validateCompletion only ever reads `title` (see protocol.ts), and
+    // completeCanvas() no longer even accepts an author argument — the
+    // author reported below is always the joined profiles.handle for this
+    // canvas's owner_id, so a client-supplied `author` field has no path
+    // to influence it at all, not merely one that gets overridden.
+    const signRes = await post(`/canvases/${canvasId}/complete`, {
+      title: "Attribution Test",
+      author: "Someone Else Entirely",
+    });
+    assertEquals(signRes.status, 200);
+
+    const realHandle = (await (await get("/api/me")).json()).handle;
+    const mine = await (await get("/api/me/canvases")).json();
+    const signed = mine.completed.find((c: { id: string }) =>
+      c.id === canvasId
+    );
+    assertEquals(signed?.author, realHandle);
+    assertNotEquals(signed?.author, "Someone Else Entirely");
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("GET /canvases/:id/jpaint 404s for a draft and exports the full event log for a signed painting", async () => {
+  const canvasId = ulid();
+  try {
+    await put("/api/me/draft", { id: canvasId });
+
+    // Not yet signed: no export.
+    const draftExport = await get(`/canvases/${canvasId}/jpaint`);
+    assertEquals(draftExport.status, 404);
+
+    const strokeIds = [ulid(), ulid(), ulid()];
+    for (const [index, strokeId] of strokeIds.entries()) {
+      await post(`/canvases/${canvasId}/events`, {
+        events: [{
+          id: ulid(),
+          kind: "stroke",
+          strokeId,
+          cells: cellsBase64([[index, -1]]),
+          revertsId: null,
+          clientTs: Date.now(),
+        }],
+        heartbeatActive: true,
+      });
+    }
+    await post(`/canvases/${canvasId}/complete`, { title: "Exported" });
+
+    const res = await get(`/canvases/${canvasId}/jpaint`);
+    assertEquals(res.status, 200);
+    // Its own media type, not plain JSON — Response.json() would hardcode
+    // application/json, so the route must set this explicitly.
+    assertEquals(res.headers.get("content-type"), "application/x-jpaint+json");
+    // The title, not the id — a ULID in a downloads folder tells the user
+    // nothing. Sanitized, with an RFC 5987 filename* alongside the ASCII
+    // fallback; see src/server/content-disposition.ts.
+    const disposition = res.headers.get("content-disposition") ?? "";
+    assertStringIncludes(disposition, 'filename="Exported.jpaint"');
+    assertStringIncludes(disposition, "filename*=UTF-8''Exported.jpaint");
+    const doc = await res.json();
+    assertEquals(doc.jpaint, 1);
+    assertEquals(doc.id, canvasId);
+    assertEquals(doc.title, "Exported");
+    assertEquals(typeof doc.author, "string");
+    assertEquals(doc.width, 16);
+    assertEquals(doc.height, 16);
+    assertEquals(typeof doc.pixels, "string");
+    // The FULL event log: every stroke pushed above, none dropped —
+    // buildCanvasReplay()'s bounding/clamping never applies to this route.
+    assertEquals(doc.events.length, strokeIds.length);
+    assertEquals(
+      doc.events.map((e: { strokeId: string }) => e.strokeId),
+      strokeIds,
+    );
+
+    // `?events=none` omits the (potentially large, unbounded) event log
+    // for a caller who only wants the finished image, but keeps every
+    // other field intact.
+    const noEventsRes = await get(`/canvases/${canvasId}/jpaint?events=none`);
+    assertEquals(noEventsRes.status, 200);
+    const noEventsDoc = await noEventsRes.json();
+    assertEquals(noEventsDoc.events.length, 0);
+    assertEquals(noEventsDoc.pixels, doc.pixels);
+    assertEquals(noEventsDoc.title, doc.title);
+  } finally {
+    await dropCanvas(canvasId);
+  }
+});
+
+Deno.test("after a rename, the renamer's signed painting reports the new handle in /api/me/canvases; another profile's painting is unaffected", async () => {
+  const canvasId = ulid();
+  const otherSession = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  const otherCanvasId = ulid();
+  try {
+    // Someone else's signed painting, to prove the rename is scoped.
+    await put("/api/me/draft", { id: otherCanvasId }, otherSession);
+    await post(`/canvases/${otherCanvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[0, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    }, otherSession);
+    await post(
+      `/canvases/${otherCanvasId}/complete`,
+      { title: "Someone Else" },
+      otherSession,
+    );
+    const otherBefore = await (await get("/api/me/canvases", otherSession))
+      .json();
+    const otherAuthor = otherBefore.completed.find(
+      (c: { id: string }) => c.id === otherCanvasId,
+    )?.author;
+    assertEquals(typeof otherAuthor, "string");
+
+    await put("/api/me/draft", { id: canvasId });
+    await post(`/canvases/${canvasId}/events`, {
+      events: [{
+        id: ulid(),
+        kind: "stroke",
+        strokeId: ulid(),
+        cells: cellsBase64([[0, -1]]),
+        revertsId: null,
+        clientTs: Date.now(),
+      }],
+      heartbeatActive: true,
+    });
+    await post(`/canvases/${canvasId}/complete`, { title: "Follows Rename" });
+
+    const beforeRename = await (await get("/api/me/canvases")).json();
+    const authorBeforeRename = beforeRename.completed.find(
+      (c: { id: string }) => c.id === canvasId,
+    )?.author;
+    assertEquals(typeof authorBeforeRename, "string");
+
+    // author is derived at read time by joining profiles.handle off
+    // owner_id (see getGuestDraft()/listGuestCompleted() etc. in db.ts) —
+    // there is nothing stored on the canvas to rewrite. Renaming the
+    // profile's handle is automatically reflected the next time this
+    // profile's own signed painting is read...
+    const newHandle = `Renamed ${ulid().slice(0, 4)}`;
+    const renamed = await put("/api/me/handle", { handle: newHandle });
+    assertEquals(renamed.status, 200);
+    assertNotEquals(newHandle, authorBeforeRename);
+
+    const afterRename = await (await get("/api/me/canvases")).json();
+    assertEquals(
+      afterRename.completed.find((c: { id: string }) => c.id === canvasId)
+        ?.author,
+      newHandle,
+      "the renamer's own signed painting should carry the new handle",
+    );
+
+    // ...and strictly nowhere else. This is the property that matters: the
+    // UPDATE (in renameHandle()) is scoped to a single profile id, so one
+    // profile's rename can never relabel another profile's public work.
+    const otherAfter = await (await get("/api/me/canvases", otherSession))
+      .json();
+    assertEquals(
+      otherAfter.completed.find((c: { id: string }) => c.id === otherCanvasId)
+        ?.author,
+      otherAuthor,
+      "another profile's painting must be untouched by someone else's rename",
+    );
+  } finally {
+    await dropCanvas(canvasId);
+    await dropCanvas(otherCanvasId);
+    await dropProfile(otherSession.guestId);
+  }
+});
+
 Deno.test("an undo event carries revertsId pointing at the reverted stroke's id, and doesn't delete it", async () => {
   const canvasId = ulid();
   try {
@@ -537,16 +761,39 @@ Deno.test("the SSE stream sends real diffs for strokes, and a full resync only f
       return JSON.parse(frame.replace(/^data: /, ""));
     }
 
-    // The cross-instance poll-loop backstop can independently notice the
-    // same change the immediate same-process broadcast already sent,
-    // producing a harmless redundant "diff" — skip any of those while
+    // The cross-instance poll-loop backstop (200ms interval — see
+    // POLL_INTERVAL_MS in main.ts) can independently notice the same
+    // change the immediate same-process broadcast already sent, producing
+    // a harmless redundant "diff"/"snapshot" — skip any of those while
     // waiting for a message of a specific type.
+    //
+    // The budget here is deliberately generous (was 5; this flaked once
+    // in three runs at that budget after Phase 2 added a database round
+    // trip — ensureProfile() — to the first events-POST push per profile
+    // per process, ahead of this test in file order). Investigated
+    // directly: ran this file against a real ephemeral Turso database
+    // twice more here and it passed both times at ~1-2s per test, so the
+    // failure did not reproduce in this environment — but the causal
+    // mechanism is real and traceable to our own change regardless: any
+    // extra latency on the push path (a slow round trip here, ordinary
+    // network jitter to Turso elsewhere) gives the fixed-interval poller
+    // more 200ms windows to fire redundant messages before the awaited
+    // one arrives, and a small fixed message-count budget racing an
+    // unbounded-in-practice background poller is fragile on its own
+    // terms, independent of whether this specific run reproduces it.
+    // Widening the margin costs nothing (each extra attempt is one more
+    // already-arrived-or-imminent SSE frame, not a new wait), so this
+    // errs generous rather than re-tightening a budget already shown to
+    // flake.
     async function nextMessageOfType(type: string) {
-      for (let attempt = 0; attempt < 5; attempt++) {
+      const maxAttempts = 20;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
         const msg = await nextMessage();
         if (msg.type === type) return msg;
       }
-      throw new Error(`no "${type}" message arrived within 5 messages`);
+      throw new Error(
+        `no "${type}" message arrived within ${maxAttempts} messages`,
+      );
     }
 
     const initial = await nextMessage();
@@ -588,4 +835,374 @@ Deno.test("the SSE stream sends real diffs for strokes, and a full resync only f
   } finally {
     await dropCanvas(canvasId);
   }
+});
+
+async function dropProfile(id: string) {
+  await db.execute({ sql: "DELETE FROM profiles WHERE id = ?", args: [id] });
+}
+
+Deno.test("a mutation lazily creates exactly one profiles row, and a repeat mutation does not duplicate it", async () => {
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  const draftId = ulid();
+  try {
+    const before = await db.execute({
+      sql: "SELECT COUNT(*) AS n FROM profiles WHERE id = ?",
+      args: [session.guestId],
+    });
+    assertEquals(Number(before.rows[0].n), 0);
+
+    await put("/api/me/draft", { id: draftId }, session);
+    const afterFirst = await db.execute({
+      sql: "SELECT COUNT(*) AS n FROM profiles WHERE id = ?",
+      args: [session.guestId],
+    });
+    assertEquals(Number(afterFirst.rows[0].n), 1);
+
+    // A second mutation for the same guest must not create a second row —
+    // ensureProfile() upserts, it never inserts twice.
+    await remove("/api/me/draft", session);
+    const afterSecond = await db.execute({
+      sql: "SELECT COUNT(*) AS n FROM profiles WHERE id = ?",
+      args: [session.guestId],
+    });
+    assertEquals(Number(afterSecond.rows[0].n), 1);
+  } finally {
+    await dropCanvas(draftId);
+    await dropProfile(session.guestId);
+  }
+});
+
+Deno.test("GET /api/me reflects a plain guest, then an upgraded account, and never leaks the profile id or credential internals", async () => {
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  const draftId = ulid();
+  try {
+    // A guest who has never mutated anything: no row yet, reads as the
+    // same "not an account" shape as a fresh guest row would.
+    const beforeAnyMutation = await (await get("/api/me", session)).json();
+    assertEquals(beforeAnyMutation, {
+      handle: null,
+      isAccount: false,
+      credentialCount: 0,
+      credentials: [],
+    });
+    assertEquals("id" in beforeAnyMutation, false);
+
+    // Mutate once, so the profiles row now exists. A handle is minted at
+    // creation (Phase 3 change request #2) — still a guest, zero
+    // credentials, but handle is no longer null.
+    await put("/api/me/draft", { id: draftId }, session);
+    const guestRes = await get("/api/me", session);
+    assertEquals(guestRes.headers.get("cache-control"), "private, no-store");
+    const guestBody = await guestRes.json();
+    assertMatch(guestBody.handle, /^[A-Za-z ]+ [A-Za-z]+ [0-9A-F]{4}$/);
+    assertEquals(guestBody.isAccount, false);
+    assertEquals(guestBody.credentialCount, 0);
+    assertEquals(guestBody.credentials, []);
+    const rawGuestBody = JSON.stringify(guestBody);
+    assertEquals(rawGuestBody.includes(session.guestId), false);
+
+    // Simulate an "account" the way the real registration route does: a
+    // credentials row attached to the same profile (handle already set).
+    const credentialId = ulid();
+    await db.execute({
+      sql:
+        "INSERT INTO credentials (credential_id, profile_id, public_key, created_at, nickname) " +
+        "VALUES (?, ?, ?, ?, ?)",
+      args: [
+        credentialId,
+        session.guestId,
+        new Uint8Array([1, 2, 3]),
+        Date.now(),
+        null,
+      ],
+    });
+    const accountBody = await (await get("/api/me", session)).json();
+    assertEquals(accountBody.handle, guestBody.handle);
+    assertEquals(accountBody.isAccount, true);
+    assertEquals(accountBody.credentialCount, 1);
+    assertEquals(accountBody.credentials.length, 1);
+    assertEquals(accountBody.credentials[0].credentialId, credentialId);
+    assertEquals(accountBody.credentials[0].nickname, null);
+    assertEquals(accountBody.credentials[0].backedUp, false);
+    assertEquals(typeof accountBody.credentials[0].createdAt, "number");
+    // The point of this test: nothing beyond the CredentialSummary shape
+    // ever appears — no profile id, no user_handle, no public key, no
+    // counter, anywhere in the response.
+    const rawAccountBody = JSON.stringify(accountBody);
+    assertEquals(rawAccountBody.includes(session.guestId), false);
+    assertEquals(
+      Object.keys(accountBody.credentials[0]).sort(),
+      ["backedUp", "createdAt", "credentialId", "nickname"],
+    );
+  } finally {
+    await db.execute({
+      sql: "DELETE FROM credentials WHERE profile_id = ?",
+      args: [session.guestId],
+    });
+    await dropCanvas(draftId);
+    await dropProfile(session.guestId);
+  }
+});
+
+Deno.test("PUT /api/me/handle renames and rejects a duplicate with 409", async () => {
+  const sessionA = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  const sessionB = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  try {
+    const nameA = `Rename Test ${ulid().slice(0, 4)}`;
+    const renamed = await put("/api/me/handle", { handle: nameA }, sessionA);
+    assertEquals(renamed.status, 200);
+    const renamedBody = await renamed.json();
+    assertEquals(renamedBody, { ok: true, handle: nameA });
+
+    const meAfter = await (await get("/api/me", sessionA)).json();
+    assertEquals(meAfter.handle, nameA);
+
+    // sessionB claims the same handle A already has — 409, not 500.
+    const conflict = await put("/api/me/handle", { handle: nameA }, sessionB);
+    assertEquals(conflict.status, 409);
+
+    const tooShort = await put("/api/me/handle", { handle: "a" }, sessionB);
+    assertEquals(tooShort.status, 400);
+
+    const badChars = await put(
+      "/api/me/handle",
+      { handle: "bad\nname" },
+      sessionB,
+    );
+    assertEquals(badChars.status, 400);
+
+    // A naive "collapse \s+ to a space" normalizer would launder these
+    // into legal-looking text ("bad name") before the charset check ever
+    // ran — the fix validates the raw input first, so all of these must
+    // still 400.
+    const tabName = await put(
+      "/api/me/handle",
+      { handle: "bad\tname" },
+      sessionB,
+    );
+    assertEquals(tabName.status, 400);
+    const crlfName = await put(
+      "/api/me/handle",
+      { handle: "bad\r\nname" },
+      sessionB,
+    );
+    assertEquals(crlfName.status, 400);
+  } finally {
+    await dropProfile(sessionA.guestId);
+    await dropProfile(sessionB.guestId);
+  }
+});
+
+Deno.test("DELETE /api/auth/credentials/:id refuses to remove the last passkey", async () => {
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  const credentialA = ulid();
+  const credentialB = ulid();
+  try {
+    // ensureProfile via any mutation first, then attach credentials directly
+    // (bypassing the real WebAuthn ceremony — that's covered by the
+    // Playwright CDP virtual-authenticator e2e test instead).
+    await put(
+      "/api/me/handle",
+      { handle: `Cred Test ${ulid().slice(0, 4)}` },
+      session,
+    );
+    await db.execute({
+      sql:
+        "INSERT INTO credentials (credential_id, profile_id, public_key, created_at) VALUES (?, ?, ?, ?)",
+      args: [credentialA, session.guestId, new Uint8Array([1]), Date.now()],
+    });
+    await db.execute({
+      sql:
+        "INSERT INTO credentials (credential_id, profile_id, public_key, created_at) VALUES (?, ?, ?, ?)",
+      args: [credentialB, session.guestId, new Uint8Array([2]), Date.now()],
+    });
+
+    const firstDelete = await remove(
+      `/api/auth/credentials/${credentialA}`,
+      session,
+    );
+    assertEquals(firstDelete.status, 204);
+    // Removing a passkey revokes every session for the profile, so this
+    // request's own cookie is replaced in the same response.
+    assert(firstDelete.headers.get("set-cookie"));
+    const current = adopt(session, firstDelete);
+
+    // The pre-revocation cookie is dead — that is the entire point of
+    // bumping session_epoch here, and the reason a device whose passkey was
+    // just removed cannot keep mutating.
+    const stale = await remove(
+      `/api/auth/credentials/${credentialB}`,
+      session,
+    );
+    assertEquals(stale.status, 401);
+
+    const lastDelete = await remove(
+      `/api/auth/credentials/${credentialB}`,
+      current,
+    );
+    assertEquals(lastDelete.status, 400);
+
+    const notFound = await remove(
+      `/api/auth/credentials/${ulid()}`,
+      current,
+    );
+    assertEquals(notFound.status, 404);
+  } finally {
+    await db.execute({
+      sql: "DELETE FROM credentials WHERE profile_id = ?",
+      args: [session.guestId],
+    });
+    await dropProfile(session.guestId);
+  }
+});
+
+Deno.test("register/options and register/verify 501 when WEBAUTHN_RP_ID/ORIGINS aren't configured; credential deletion is never gated", async () => {
+  // This test file never sets WEBAUTHN_RP_ID/WEBAUTHN_ORIGINS, so the two
+  // routes that actually perform a WebAuthn ceremony must 501 — guest
+  // flows (everything tested above) must keep working regardless, which
+  // the rest of this file already proves.
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  try {
+    const options = await post("/api/auth/register/options", {}, session);
+    assertEquals(options.status, 501);
+    const verify = await post(
+      "/api/auth/register/verify",
+      { credential: {} },
+      session,
+    );
+    assertEquals(verify.status, 501);
+
+    // DELETE performs no WebAuthn ceremony (no rpID/origin binding to
+    // check) and must never 501 — a user must always be able to remove a
+    // credential, including from a non-canonical origin. No credential
+    // exists here, so this exercises the ordinary 404 path, proving the
+    // request got PAST any RP gate rather than being rejected by one.
+    const remove = await handler(
+      new Request(
+        `http://localhost/api/auth/credentials/${ulid()}`,
+        { method: "DELETE", headers: { cookie: cookie(session) } },
+      ),
+    );
+    assertEquals(remove.status, 404);
+  } finally {
+    await dropProfile(session.guestId);
+  }
+});
+
+Deno.test("POST /api/auth/logout/all revokes every outstanding session for the profile", async () => {
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  // A second cookie for the SAME profile, standing in for the other device
+  // this is supposed to reach. Both were signed under the current epoch.
+  const otherDevice: GuestSession = { ...session };
+
+  // First mutation is what creates the profiles row.
+  assertEquals(
+    (await put(
+      "/api/me/handle",
+      { handle: `Revoke ${ulid().slice(0, 6)}` },
+      session,
+    ))
+      .status,
+    200,
+  );
+  const epochBefore = Number(
+    (await db.execute({
+      sql: "SELECT session_epoch FROM profiles WHERE id = ?",
+      args: [session.guestId],
+    })).rows[0].session_epoch,
+  );
+
+  const res = await post("/api/auth/logout/all", {}, session);
+  assertEquals(res.status, 200);
+
+  const epochAfter = Number(
+    (await db.execute({
+      sql: "SELECT session_epoch FROM profiles WHERE id = ?",
+      args: [session.guestId],
+    })).rows[0].session_epoch,
+  );
+  assertEquals(epochAfter, epochBefore + 1);
+
+  // The other device's cookie is now dead — this is the whole point, and
+  // the thing a plain logout could never do.
+  assertEquals(
+    (await put(
+      "/api/me/handle",
+      { handle: `Nope ${ulid().slice(0, 6)}` },
+      otherDevice,
+    ))
+      .status,
+    401,
+  );
+
+  // The caller is left on a working session, but a brand-new GUEST one:
+  // guest is this app's ground state, and there is deliberately no way back
+  // to the revoked profile without the passkey.
+  const fresh = adopt(session, res);
+  assertNotEquals(cookie(fresh), cookie(session));
+  const afterHandle = `Fresh ${ulid().slice(0, 6)}`;
+  assertEquals(
+    (await put("/api/me/handle", { handle: afterHandle }, fresh)).status,
+    200,
+  );
+  const stillOld = await db.execute({
+    sql: "SELECT handle FROM profiles WHERE id = ?",
+    args: [session.guestId],
+  });
+  assertNotEquals(String(stillOld.rows[0].handle), afterHandle);
+});
+
+Deno.test("POST /api/auth/logout/all requires a session and rejects cross-origin", async () => {
+  assertEquals(
+    (await handler(
+      new Request("http://localhost/api/auth/logout/all", { method: "POST" }),
+    )).status,
+    401,
+  );
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  assertEquals(
+    (await handler(
+      new Request("http://localhost/api/auth/logout/all", {
+        method: "POST",
+        headers: { cookie: cookie(session), origin: "https://evil.example" },
+      }),
+    )).status,
+    403,
+  );
+});
+
+Deno.test("POST /api/auth/logout/all works for a guest that has never mutated anything", async () => {
+  const session = (await guestSession(
+    new Request("http://localhost/"),
+    true,
+  )) as GuestSession;
+  // No profiles row exists — there is nothing to revoke, but the caller
+  // asked to be signed out everywhere and now is.
+  const res = await post("/api/auth/logout/all", {}, session);
+  assertEquals(res.status, 200);
+  assert(res.headers.get("set-cookie"));
 });

@@ -2,12 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#f0e0ae">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>Your Collection · Joy of Painting</title>
     <link rel="stylesheet" href="/base.css">
     <link rel="stylesheet" href="/collection.css">
-    <script type="module" src="/site-nav.js?v=3"></script>
+    <script type="module" src="/site-nav.js"></script>
+    <script type="module" src="/pwa.js"></script>
   </head>
   <body>
     <site-nav></site-nav>
@@ -19,6 +23,8 @@
         </div>
         <a class="pixel-button" href="/editor">Return to canvas</a>
       </header>
+      <section id="account-panel" class="pixel-panel account-panel"
+        aria-label="Account"></section>
       <p id="collection-status" role="status"
         aria-live="polite">Opening your collection</p>
       <section id="collection-grid" class="collection-grid"
@@ -40,6 +46,37 @@
         </div>
       </form>
     </dialog>
-    <script type="module" src="/collection-page.js?v=3"></script>
+    <dialog class="pixel-dialog merge-dialog" id="merge-dialog"
+      aria-labelledby="merge-title">
+      <form class="dialog-form" method="dialog" id="merge-form">
+        <p class="eyebrow">One painting in progress at a time</p>
+        <h2 id="merge-title">Keep which unfinished painting?</h2>
+        <p id="merge-copy">Only one painting can be in progress at a
+          time. Signing either painting first will preserve it — back
+          out, sign it, and sign in again.</p>
+        <div class="merge-drafts">
+          <div class="merge-draft" id="merge-draft-device">
+            <canvas></canvas>
+            <p class="merge-draft-label">On this device</p>
+            <p class="merge-draft-meta"></p>
+          </div>
+          <div class="merge-draft" id="merge-draft-account">
+            <canvas></canvas>
+            <p class="merge-draft-label">In your collection</p>
+            <p class="merge-draft-meta"></p>
+          </div>
+        </div>
+        <p class="dialog-status" id="merge-status" role="status"
+          aria-live="polite"></p>
+        <div class="dialog-actions merge-dialog-actions">
+          <button type="button" id="merge-back-out">Back out</button>
+          <button type="button" id="merge-keep-device"
+            class="pixel-button">Keep this device's</button>
+          <button type="button" id="merge-keep-account"
+            class="pixel-button">Keep my collection's</button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="/collection-page.js"></script>
   </body>
 </html>

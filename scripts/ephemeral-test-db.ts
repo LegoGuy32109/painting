@@ -86,6 +86,8 @@ try {
       "--allow-read",
       "tests/db_test.ts",
       "tests/sync-routes_test.ts",
+      "tests/auth-merge_test.ts",
+      "tests/transfer-codes_test.ts",
     ],
     env: {
       ...Deno.env.toObject(),

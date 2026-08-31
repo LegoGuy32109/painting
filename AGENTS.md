@@ -31,6 +31,11 @@ before adding a dependency to `src/client/`.
   scoped per Deno Deploy context (Production/Preview/Build/Local), and the
   tooling (`scripts/set-deploy-env.ts`) needed to set a different value per
   context under one key, which the `deno deploy` CLI can't do on its own.
+- `docs/signing-key-rotation.md` — how to rotate `PAINTING_KEYS`, the HMAC
+  keyset behind guest session cookies (and, from Phase 3 on, WebAuthn
+  challenges/merge tokens/transfer codes): generating a key, the waiting
+  period before dropping an old one, and the deliberate tradeoff of dropping
+  one early.
 
 Read the relevant doc before touching databases or deploy configuration — both
 have sharp edges that already bit us once each (a classic-engine database that
@@ -55,6 +60,20 @@ wrong context if you don't check its result before chaining the next command).
 - `scripts/set-deploy-env.ts` — sets one Deno Deploy env var scoped to one
   context. Use this, not `deno deploy env add`, for anything that needs a
   different value per context (see `docs/deno-deploy-env-vars.md` for why).
+- `scripts/env-manifest.ts` — the declarative table of every `.env` variable
+  (tier, and whether a value can be generated, defaulted, or must be supplied
+  manually), shared by `env:check` and `env:fill` below.
+- `scripts/env-check.ts` (`deno task env:check`) — reports which variables
+  `.env` is missing or has malformed, grouped by tier; exits non-zero only
+  when `PAINTING_KEYS` (the one variable the server refuses to boot without)
+  is missing or invalid.
+- `scripts/env-fill.ts` (`deno task env:fill`) — appends only missing
+  generate/default variables to `.env` (never overwriting an existing line),
+  after backing it up; lists Turso/Deno Deploy variables you must supply
+  yourself. Supports `--dry-run`. A green `deno task test` never proves `.env`
+  is complete — every `scripts/e2e-*.ts` harness injects its own env vars into
+  the server subprocess it spawns, so it's self-sufficient and never touches
+  the real `.env`; this pair of tasks is what actually catches that drift.
 
 ## Secrets
 

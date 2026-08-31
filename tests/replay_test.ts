@@ -32,14 +32,14 @@ Deno.test("completed replay keeps only the final event count", () => {
         cells: encodeCells([[index % 256, -65536]]),
       }),
   );
-  const replay = buildCanvasReplay("canvas", "Clouds", events);
+  const replay = buildCanvasReplay("canvas", "Clouds", "Test Author", events);
   assertEquals(replay.steps.length, 4_000);
   assertEquals(replay.steps[0].atMs, 0);
   assertEquals(replay.durationMs, 3_999);
 });
 
 Deno.test("replay gaps are capped at half a second", () => {
-  const replay = buildCanvasReplay("canvas", "Clouds", [
+  const replay = buildCanvasReplay("canvas", "Clouds", "Test Author", [
     event(1, "stroke", 0, {
       strokeId: "old",
       cells: encodeCells([[0, -65536]]),
@@ -57,6 +57,7 @@ Deno.test("long replays preserve their capped relative timeline", () => {
   const replay = buildCanvasReplay(
     "canvas",
     "Long pause",
+    "Test Author",
     Array.from(
       { length: 140 },
       (_, index) =>
@@ -74,7 +75,7 @@ Deno.test("long replays preserve their capped relative timeline", () => {
 });
 
 Deno.test("undo inside a replay window becomes a corrected snapshot", () => {
-  const replay = buildCanvasReplay("canvas", "Undo", [
+  const replay = buildCanvasReplay("canvas", "Undo", "Test Author", [
     event(1, "stroke", 0, {
       strokeId: "painted",
       cells: encodeCells([[0, -65536]]),
@@ -90,7 +91,7 @@ Deno.test("undo inside a replay window becomes a corrected snapshot", () => {
 });
 
 Deno.test("replay timestamps never move backward", () => {
-  const replay = buildCanvasReplay("canvas", "Clock", [
+  const replay = buildCanvasReplay("canvas", "Clock", "Test Author", [
     event(1, "stroke", 100, {
       strokeId: "one",
       cells: encodeCells([[0, -1]]),
@@ -101,4 +102,32 @@ Deno.test("replay timestamps never move backward", () => {
     }),
   ]);
   assertEquals(replay.steps.map((step) => step.atMs), [0, 0]);
+});
+
+Deno.test("buildCanvasReplay threads author straight through, including null", () => {
+  const events = [
+    event(1, "stroke", 0, {
+      strokeId: "one",
+      cells: encodeCells([[0, -1]]),
+    }),
+  ];
+  const withAuthor = buildCanvasReplay(
+    "canvas",
+    "Signed",
+    "Cerulean Otter",
+    events,
+  );
+  assertEquals(withAuthor.author, "Cerulean Otter");
+
+  // A canvas whose owner has no profiles row (an orphaned owner_id) has no
+  // handle to report — serializes as a plain JSON null, not an empty
+  // string or an omitted field.
+  const withoutAuthor = buildCanvasReplay(
+    "canvas",
+    "Pre-existing",
+    null,
+    events,
+  );
+  assertEquals(withoutAuthor.author, null);
+  assertEquals(JSON.parse(JSON.stringify(withoutAuthor)).author, null);
 });

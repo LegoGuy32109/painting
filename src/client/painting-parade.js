@@ -1,11 +1,16 @@
 // @ts-check
 
 /** @typedef {import("../shared/paint-types.d.ts").CanvasReplayResponse} CanvasReplayResponse */
-/** @typedef {import("../shared/paint-types.d.ts").DisplayFeedResponse} DisplayFeedResponse */
+/** @typedef {import("../shared/paint-types.d.ts").CompletedFeedResponse} CompletedFeedResponse */
+/** @typedef {import("../shared/paint-types.d.ts").LiveStreamMessage} LiveStreamMessage */
 /** @typedef {import("../shared/paint-types.d.ts").PublicCanvas} PublicCanvas */
-/** @typedef {{ id: string, kind: "active" | "completed", figure: HTMLElement, context: CanvasRenderingContext2D, pixels: Int32Array, state: HTMLElement, source: EventSource | null, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, animation: Animation | null, playbackStartedAt: number | null, playbackDurationMs: number }} ParadeEntry */
+/** @typedef {{ canvas: PublicCanvas, kind: "active" | "completed" }} ParadeCandidate */
+/** @typedef {{ index: number, id: string | null, kind: "active" | "completed" | "placeholder", figure: HTMLElement, context: CanvasRenderingContext2D, title: HTMLElement, author: HTMLElement, state: HTMLElement, pixels: Int32Array, replay: LiveReplay | null, timeline: CanvasReplayResponse | null, nextStep: number, playbackStartedAt: number, playbackDurationMs: number, assignment: number, hydrating: boolean, pendingCandidate: ParadeCandidate | null }} ParadeSlot */
 
 import { LiveReplay } from "./live-replay.js";
+import { parseLiveStreamMessage } from "./live-stream-message.js";
+import { ParadeState } from "./parade-state.js";
+import { createPixels } from "../shared/paint-engine.js";
 import {
   applyEncodedCells,
   decodePixels,
@@ -13,60 +18,77 @@ import {
   paintingContext,
 } from "../shared/pixel-render.js";
 
-const SPAWN_INTERVAL_MS = 6_000;
-const TRAVEL_DURATION_SECONDS = 52;
-const RECENT_COMPLETED_LIMIT = 10;
+const config = {
+  speedPxPerSecond: 28,
+  slotIntervalSeconds: 6,
+  // How long a completed painting's replay takes, in wall-clock ms. This is
+  // deliberately a duration of its own and not derived from how far a card
+  // has to travel: replaying the strokes is how a viewer reads the art, so
+  // it must behave identically whether the card drifts across a wide desktop
+  // stage, a narrow phone one, or (under prefers-reduced-motion) not at all.
+  completedReplayMs: 22_000,
+  completedResumeDelayMs: 5_000,
+  ...(/** @type {any} */ (window).__PAINTING_TEST_CONFIG__ ?? {}),
+};
 
 class PaintingParade extends HTMLElement {
   constructor() {
     super();
     this.root = this.attachShadow({ mode: "open" });
-    /** @type {Array<{canvas: PublicCanvas, kind: "active" | "completed"}>} */
-    this.queue = [];
-    /** @type {Map<string, any>} */
-    this.visible = new Map();
-    this.queuedIds = new Set();
-    /** @type {string[]} */
-    this.recentCompleted = [];
+    this.state = new ParadeState();
+    /** @type {ParadeSlot[]} */
+    this.slots = [];
+    /** @type {Map<string, Int32Array>} */
+    this.livePixels = new Map();
+    /** @type {Map<string, number>} */
+    this.liveSequences = new Map();
+    /** @type {Map<string, Promise<CanvasReplayResponse>>} */
+    this.replayCache = new Map();
+    /** @type {Array<() => Promise<void>>} */
+    this.replayQueue = [];
+    this.replayRequestsInFlight = 0;
     /** @type {HTMLElement} */
     this.stage = /** @type {any} */ (null);
-    this.refreshTimer = 0;
-    this.spawnTimer = 0;
+    /** @type {EventSource | null} */
+    this.source = null;
+    /** @type {ResizeObserver | null} */
+    this.resizeObserver = null;
+    this.resizeFrame = 0;
     this.drainTimer = 0;
-    this.refreshing = false;
+    this.completedResumeTimer = 0;
+    this.fetchingCompleted = false;
     this.hidden = document.visibilityState !== "visible";
-    this.spawnSequence = 0;
+    this.liveSynced = false;
+    this.hadLive = false;
+    this.completedResumeAt = 0;
     this.onVisibility = this.onVisibility.bind(this);
   }
 
   connectedCallback() {
     if (this.root.childNodes.length === 0) this.build();
     document.addEventListener("visibilitychange", this.onVisibility);
-    void this.refresh();
-    this.refreshTimer = setInterval(() => void this.refresh(), 5_000);
-    this.scheduleNextSpawn();
+    this.rebuildSlots();
+    this.resizeObserver = new ResizeObserver(() => this.scheduleSlotRebuild());
+    this.resizeObserver.observe(this);
+    this.connect();
+    void this.fetchCompletedPage();
     this.drainTimer = setInterval(() => this.drain(), 33);
   }
 
   disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.onVisibility);
-    clearInterval(this.refreshTimer);
-    clearInterval(this.spawnTimer);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    cancelAnimationFrame(this.resizeFrame);
     clearInterval(this.drainTimer);
-    for (const entry of this.visible.values()) entry.source?.close();
-    this.visible.clear();
+    clearTimeout(this.completedResumeTimer);
+    this.source?.close();
+    this.source = null;
+    this.releaseSlots();
   }
 
   get mode() {
     return this.getAttribute("mode") === "display" ? "display" : "ambient";
-  }
-
-  get capacity() {
-    const narrow = matchMedia("(max-width: 40rem)").matches;
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      return narrow ? 4 : 8;
-    }
-    return 10;
   }
 
   build() {
@@ -74,12 +96,17 @@ class PaintingParade extends HTMLElement {
     style.textContent = `
       :host { display:block; position:absolute; inset:0; overflow:hidden; pointer-events:none; contain:strict; }
       .stage { position:absolute; inset:0; overflow:hidden; }
-      figure { --size:clamp(7rem,18vw,13rem); position:absolute; z-index:1; right:100%; width:var(--size); margin:0; padding:.5rem; color:#1d1d21; border:.1875rem solid #5d482c; background:#fff8e5; box-shadow:.35rem .35rem 0 rgb(45 32 18 / 28%); animation:travel ${TRAVEL_DURATION_SECONDS}s linear forwards; will-change:transform; }
+      figure { --size:clamp(7rem,18vw,13rem); position:absolute; z-index:1; right:100%; width:var(--size); margin:0; padding:.5rem; color:#1d1d21; border:.1875rem solid #5d482c; background:#fff8e5; box-shadow:.35rem .35rem 0 rgb(45 32 18 / 28%); animation:travel var(--travel-duration,52s) linear infinite; will-change:transform; }
       figure[data-row="top"] { top:18%; }
       figure[data-row="bottom"] { top:66%; }
       canvas { display:block; width:100%; aspect-ratio:1; image-rendering:pixelated; background:#fff9ff; }
-      figcaption { display:flex; justify-content:space-between; gap:.5rem; min-height:1.3rem; padding-top:.45rem; overflow:hidden; font:clamp(.55rem,1.4vw,.72rem)/1.2 ui-monospace,monospace; white-space:nowrap; }
+      figure[data-kind="placeholder"] canvas { opacity:.38; animation:loading-pulse .9s steps(2,end) infinite; }
+      figure[data-kind="placeholder"] figcaption { color:#796f5e; }
+      figcaption { display:flex; align-items:flex-start; justify-content:space-between; gap:.5rem; min-height:1.3rem; padding-top:.45rem; overflow:hidden; font:clamp(.55rem,1.4vw,.72rem)/1.2 ui-monospace,monospace; white-space:nowrap; }
+      .meta { display:flex; min-width:0; flex-direction:column; overflow:hidden; }
       .title { overflow:hidden; text-overflow:ellipsis; }
+      .author { overflow:hidden; text-overflow:ellipsis; opacity:.62; }
+      .author:empty { display:none; }
       .live { color:#b02e26; }
       :host([mode="ambient"]) { opacity:.55; filter:saturate(.85); }
       :host([mode="ambient"]) figure { --size:clamp(6rem,15vw,10rem); }
@@ -87,7 +114,17 @@ class PaintingParade extends HTMLElement {
       :host([mode="display"]) figure[data-row="bottom"] { top:59%; }
       :host([paused]) figure { animation-play-state:paused; }
       @keyframes travel { from { transform:translate3d(0,0,0); } to { transform:translate3d(calc(100vw + 170%),0,0); } }
-      @media (prefers-reduced-motion:reduce) { figure { right:auto; left:var(--still-x); animation:none; } }
+      @keyframes loading-pulse { 50% { opacity:.62; } }
+      @media (max-width:34rem) {
+        :host([mode="ambient"]) figure[data-row="top"] { top:18%; }
+        :host([mode="ambient"]) figure[data-row="bottom"] { top:calc(18% + clamp(9rem,30vw,11rem)); }
+      }
+      /* Deliberately NO prefers-reduced-motion override for the figures.
+         Cards drift on every device and every setting: the drifting gallery
+         IS the page, and pinning them still left nothing to look at. A
+         considered override of an accessibility preference, not an
+         oversight - see rebuildSlots(). The motion is a gentle ~28px per
+         second, and nothing scales, rotates or parallaxes while it moves. */
     `;
     const stage = document.createElement("div");
     stage.className = "stage";
@@ -97,289 +134,527 @@ class PaintingParade extends HTMLElement {
     this.stage = stage;
   }
 
-  async refresh() {
-    if (this.refreshing || this.hidden) return;
-    this.refreshing = true;
-    try {
-      const response = await fetch(`/api/display-feed?limit=${this.capacity}`);
-      if (!response.ok) {
-        throw new Error(`display feed failed: ${response.status}`);
+  connect() {
+    this.source?.close();
+    const source = new EventSource("/api/live-stream");
+    this.source = source;
+    this.dataset.streamCount = "1";
+    for (const type of ["sync", "snapshot", "diff", "completed", "inactive"]) {
+      source.addEventListener(type, (event) => {
+        const message = parseLiveStreamMessage(
+          /** @type {MessageEvent} */ (event).data,
+        );
+        if (message) this.receive(message);
+        else {
+          this.dispatchEvent(
+            new CustomEvent("parade-error", {
+              detail: new Error(`invalid ${type} live-stream message`),
+            }),
+          );
+        }
+      });
+    }
+    source.onerror = () =>
+      this.dispatchEvent(
+        new CustomEvent("parade-error", {
+          detail: new Error("live stream disconnected; EventSource will retry"),
+        }),
+      );
+  }
+
+  /** @param {LiveStreamMessage} message */
+  receive(message) {
+    if (message.version !== 1) return;
+    if (message.type === "sync") {
+      this.liveSynced = true;
+      this.state.syncActive(message.canvases);
+      this.updateLivePriority();
+      for (const item of message.canvases) {
+        this.livePixels.set(item.canvas.id, decodePixels(item.canvas.pixels));
+        this.liveSequences.set(item.canvas.id, item.headSequence);
       }
-      const feed = /** @type {DisplayFeedResponse} */ (await response.json());
-      const additions = [];
-      for (const canvas of feed.active) {
-        if (!this.visible.has(canvas.id) && !this.queuedIds.has(canvas.id)) {
-          additions.push({ canvas, kind: /** @type {const} */ ("active") });
+      for (const slot of this.slots) {
+        if (
+          slot.kind === "active" && slot.id && !this.state.active.has(slot.id)
+        ) {
+          this.recycleSlot(slot);
         }
       }
-      const completedAvailable = feed.completed.filter((canvas) =>
-        !this.visible.has(canvas.id) && !this.queuedIds.has(canvas.id)
-      );
-      let completedAdditions = completedAvailable.filter((canvas) =>
-        !this.recentCompleted.includes(canvas.id)
-      );
-      const completedInFlight = this.queue.some((item) =>
-        item.kind === "completed"
-      ) || [...this.visible.values()].some((entry) =>
-        entry.kind === "completed"
-      );
-      if (
-        completedAdditions.length === 0 && completedAvailable.length > 0 &&
-        !completedInFlight
-      ) {
-        this.recentCompleted.length = 0;
-        completedAdditions = completedAvailable;
-      }
-      for (const canvas of completedAdditions) {
-        additions.push({ canvas, kind: /** @type {const} */ ("completed") });
-      }
-      const activeAdditions = additions.filter((item) =>
-        item.kind === "active"
-      );
-      const queuedCompletedAdditions = additions.filter((item) =>
-        item.kind === "completed"
-      );
-      this.queue = [
-        ...activeAdditions,
-        ...this.queue,
-        ...queuedCompletedAdditions,
-      ];
-      for (const addition of additions) {
-        this.queuedIds.add(addition.canvas.id);
-      }
-      if (this.visible.size === 0 && this.queue.length) {
-        await this.spawnNext();
-      }
-    } catch (error) {
-      this.dispatchEvent(new CustomEvent("parade-error", { detail: error }));
-    } finally {
-      this.refreshing = false;
-    }
-  }
-
-  async spawnNext() {
-    if (this.hidden) return;
-    if (this.visible.size >= this.capacity) {
-      this.scheduleNextSpawn();
+      void this.fillSlots();
       return;
     }
-    const candidate = this.queue.shift();
-    if (!candidate) {
-      void this.refresh();
-      this.scheduleNextSpawn();
+    if (message.type === "snapshot") {
+      this.state.addActive(message.canvas, true);
+      this.updateLivePriority();
+      const pixels = decodePixels(message.canvas.pixels);
+      this.livePixels.set(message.canvas.id, pixels);
+      this.liveSequences.set(message.canvas.id, message.headSequence);
+      for (const slot of this.assignedSlots(message.canvas.id)) {
+        slot.pixels = pixels.slice();
+        slot.replay?.reset();
+        drawPixels(slot.context, slot.pixels);
+      }
+      void this.fillSlots();
       return;
     }
-    this.queuedIds.delete(candidate.canvas.id);
-    try {
-      const entry = candidate.kind === "active"
-        ? this.activeEntry(candidate.canvas)
-        : await this.completedEntry(candidate.canvas);
-      this.visible.set(candidate.canvas.id, entry);
-      this.stage.append(entry.figure);
-      this.scheduleNextSpawn();
-    } catch {
-      setTimeout(() => void this.spawnNext(), 250);
+    if (message.type === "diff") {
+      const known = this.liveSequences.get(message.canvasId) ?? 0;
+      const fresh = message.batches.filter((batch) => batch.sequence > known);
+      if (fresh.length === 0) return;
+      const pixels = this.livePixels.get(message.canvasId);
+      if (pixels) {
+        for (const batch of fresh) {
+          for (const [index, color] of batch.cells) pixels[index] = color;
+        }
+      }
+      this.liveSequences.set(message.canvasId, message.headSequence);
+      for (const slot of this.assignedSlots(message.canvasId)) {
+        slot.replay?.receive(fresh, Date.now());
+      }
+      return;
     }
+    if (message.type === "completed") {
+      this.state.complete(message.canvas);
+      this.updateLivePriority();
+      this.livePixels.delete(message.canvas.id);
+      this.liveSequences.delete(message.canvas.id);
+      for (const slot of this.assignedSlots(message.canvas.id)) {
+        this.recycleSlot(slot);
+      }
+      void this.fillSlots();
+      return;
+    }
+    this.state.removeActive(message.canvasId);
+    this.updateLivePriority();
+    this.livePixels.delete(message.canvasId);
+    this.liveSequences.delete(message.canvasId);
+    for (const slot of this.assignedSlots(message.canvasId)) {
+      this.recycleSlot(slot);
+    }
+    if (this.state.active.size === 0) void this.fetchCompletedPage();
   }
 
-  scheduleNextSpawn() {
-    clearTimeout(this.spawnTimer);
-    this.spawnTimer = setTimeout(
-      () => void this.spawnNext(),
-      SPAWN_INTERVAL_MS,
+  scheduleSlotRebuild() {
+    cancelAnimationFrame(this.resizeFrame);
+    this.resizeFrame = requestAnimationFrame(() => this.rebuildSlots());
+  }
+
+  rebuildSlots() {
+    this.releaseSlots();
+    this.stage.replaceChildren();
+    const probe = this.createSlot(0);
+    this.stage.append(probe.figure);
+    const cardWidth = probe.figure.getBoundingClientRect().width;
+    probe.figure.remove();
+    const stageWidth = this.stage.getBoundingClientRect().width || innerWidth;
+    // prefers-reduced-motion is intentionally not consulted here. It used to
+    // collapse this whole block — zero duration, a fixed slot count, no
+    // per-card phase — which pinned every card in a static grid. That was
+    // also the source of a frozen-replay bug, because the replay clock was
+    // read off the travel animation this branch deleted. One code path is
+    // both what the product wants and one fewer way to get stuck.
+    const distance = stageWidth + cardWidth * 1.7;
+    const durationSeconds = distance / config.speedPxPerSecond;
+    let slotCount = Math.max(
+      2,
+      Math.min(64, Math.ceil(durationSeconds / config.slotIntervalSeconds)),
     );
+    if (slotCount % 2 !== 0) slotCount++;
+    const slotIntervalSeconds = durationSeconds / slotCount;
+    this.dataset.slotCount = String(slotCount);
+    this.dataset.travelDuration = String(durationSeconds);
+    this.dataset.slotInterval = String(slotIntervalSeconds);
+    for (let index = 0; index < slotCount; index++) {
+      const slot = this.createSlot(index);
+      const phase = (slotCount - index - 1) * slotIntervalSeconds;
+      slot.figure.dataset.phaseSeconds = String(phase);
+      slot.figure.style.setProperty("--travel-duration", `${durationSeconds}s`);
+      slot.figure.style.animationDelay = `${-phase}s`;
+      this.slots.push(slot);
+      this.stage.append(slot.figure);
+    }
+    void this.fillSlots();
   }
 
-  /** @param {PublicCanvas} canvas @param {"active" | "completed"} kind @returns {ParadeEntry} */
-  baseEntry(canvas, kind) {
+  releaseSlots() {
+    for (const slot of this.slots) {
+      slot.assignment++;
+      if (slot.pendingCandidate) this.releaseCandidate(slot.pendingCandidate);
+      else if (slot.id && slot.kind !== "placeholder") {
+        const canvas = slot.kind === "active"
+          ? this.state.active.get(slot.id)
+          : this.state.completed.get(slot.id);
+        if (canvas) this.releaseCandidate({ canvas, kind: slot.kind });
+      }
+    }
+    this.slots = [];
+  }
+
+  /** @param {number} index @returns {ParadeSlot} */
+  createSlot(index) {
     const figure = document.createElement("figure");
-    const sequence = this.spawnSequence++;
-    const row = sequence % 2 === 0 ? "top" : "bottom";
-    const narrow = matchMedia("(max-width: 40rem)").matches;
-    const columns = narrow ? 2 : 4;
-    const column = Math.floor(sequence / 2) % columns;
-    const stillX = columns === 2 ? 5 + column * 50 : 4 + column * 24;
+    const row = index % 2 === 0 ? "top" : "bottom";
+    figure.dataset.slotIndex = String(index);
+    figure.dataset.canvasId = "";
+    figure.dataset.kind = "placeholder";
     figure.dataset.row = row;
-    figure.dataset.sequence = String(sequence);
-    figure.style.setProperty("--still-x", `${stillX}%`);
-    const canvasElement = document.createElement("canvas");
-    const context = paintingContext(canvasElement);
-    const pixels = decodePixels(canvas.pixels);
-    drawPixels(context, pixels);
-    const caption = document.createElement("figcaption");
+    const canvas = document.createElement("canvas");
+    const context = paintingContext(canvas);
     const title = document.createElement("span");
     title.className = "title";
-    title.textContent = canvas.title ||
-      (kind === "active" ? "Painting now" : "Untitled");
+    const author = document.createElement("span");
+    author.className = "author";
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.append(title, author);
     const state = document.createElement("span");
-    state.className = kind === "active" ? "live" : "replay";
-    state.textContent = kind === "active" ? "LIVE" : "REPLAY";
-    caption.append(title, state);
-    figure.append(canvasElement, caption);
-    const entry = /** @type {ParadeEntry} */ ({
-      id: canvas.id,
-      kind,
+    const caption = document.createElement("figcaption");
+    caption.append(meta, state);
+    figure.append(canvas, caption);
+    const slot = /** @type {ParadeSlot} */ ({
+      index,
+      id: null,
+      kind: "placeholder",
       figure,
       context,
-      pixels,
+      title,
+      author,
       state,
-      source: null,
+      pixels: createPixels(),
       replay: null,
       timeline: null,
       nextStep: 0,
-      animation: null,
-      playbackStartedAt: null,
+      playbackStartedAt: 0,
       playbackDurationMs: 0,
+      assignment: 0,
+      hydrating: false,
+      pendingCandidate: null,
     });
-    figure.addEventListener("animationend", () => this.retire(entry), {
-      once: true,
-    });
-    return entry;
+    this.showPlaceholder(slot);
+    figure.addEventListener("animationiteration", () => this.recycleSlot(slot));
+    return slot;
   }
 
-  /** @param {PublicCanvas} canvas */
-  activeEntry(canvas) {
-    const entry = this.baseEntry(canvas, "active");
-    entry.replay = new LiveReplay({ lagMs: 500, catchUpThresholdMs: 2_000 });
-    this.connect(entry);
-    return entry;
+  /** @param {ParadeSlot} slot */
+  recycleSlot(slot) {
+    if (!this.slots.includes(slot)) return;
+    if (slot.hydrating) return;
+    slot.assignment++;
+    if (slot.pendingCandidate) this.releaseCandidate(slot.pendingCandidate);
+    this.showPlaceholder(slot);
+    void this.populateSlot(slot);
   }
 
-  /** @param {PublicCanvas} canvas */
-  async completedEntry(canvas) {
-    const response = await fetch(`/canvases/${canvas.id}/replay?v=4`);
-    if (!response.ok) throw new Error(`replay failed: ${response.status}`);
-    const timeline =
-      /** @type {CanvasReplayResponse} */ (await response.json());
-    const entry = this.baseEntry(
-      { ...canvas, pixels: timeline.initialPixels },
-      "completed",
+  async fillSlots() {
+    if (!this.liveSynced) return;
+    await Promise.all(
+      this.slots.filter((slot) =>
+        slot.kind === "placeholder" && !slot.hydrating
+      ).map((slot) => this.populateSlot(slot)),
     );
-    entry.timeline = timeline;
-    this.recentCompleted.push(canvas.id);
-    if (this.recentCompleted.length > RECENT_COMPLETED_LIMIT) {
-      this.recentCompleted.shift();
-    }
-    return entry;
   }
 
-  /** @param {ParadeEntry} entry */
-  startCompletedPlayback(entry) {
-    if (entry.kind !== "completed" || entry.playbackStartedAt !== null) return;
-    const animation = entry.figure.getAnimations()[0] ?? null;
-    entry.animation = animation;
-    if (!animation) {
-      entry.playbackStartedAt = 0;
-      entry.playbackDurationMs = 0;
+  /** @param {ParadeSlot} slot */
+  async populateSlot(slot) {
+    if (
+      !this.liveSynced || slot.hydrating ||
+      (this.state.active.size === 0 && Date.now() < this.completedResumeAt)
+    ) return;
+    if (this.state.needsCompletedPage()) void this.fetchCompletedPage();
+    const visibleIds = new Set(
+      this.slots.flatMap((entry) => {
+        const id = entry.id ?? entry.pendingCandidate?.canvas.id;
+        return id ? [id] : [];
+      }),
+    );
+    const candidate = /** @type {ParadeCandidate | null} */ (
+      this.state.next(visibleIds)
+    );
+    if (!candidate) return;
+    const assignment = ++slot.assignment;
+    slot.hydrating = true;
+    slot.pendingCandidate = candidate;
+    try {
+      if (candidate.kind === "active") {
+        if (slot.assignment !== assignment) return;
+        this.showActive(slot, candidate.canvas);
+      } else {
+        const timeline = await this.completedReplay(candidate.canvas.id);
+        if (slot.assignment !== assignment) return;
+        if (this.state.active.size > 0) {
+          this.releaseCandidate(candidate);
+          this.showPlaceholder(slot);
+          return;
+        }
+        this.showCompleted(slot, candidate.canvas, timeline);
+      }
+      slot.pendingCandidate = null;
+      this.recordAssignment(slot);
+    } catch (error) {
+      if (slot.assignment === assignment) {
+        this.releaseCandidate(candidate);
+        this.showPlaceholder(slot);
+        this.dispatchEvent(new CustomEvent("parade-error", { detail: error }));
+      }
+    } finally {
+      if (slot.assignment === assignment) {
+        slot.hydrating = false;
+        slot.pendingCandidate = null;
+      }
+    }
+  }
+
+  /** @param {ParadeCandidate} candidate */
+  releaseCandidate(candidate) {
+    const id = candidate.canvas.id;
+    if (candidate.kind === "active") {
+      if (this.state.active.has(id) && !this.state.activeRound.includes(id)) {
+        this.state.activeRound.unshift(id);
+      }
       return;
     }
-    const animationTime = Number(animation.currentTime);
-    const animationDuration = Number(
-      animation.effect?.getComputedTiming().duration,
-    );
-    const stageBounds = this.stage.getBoundingClientRect();
-    const figureBounds = entry.figure.getBoundingClientRect();
-    const travelDistance = stageBounds.width + figureBounds.width * 1.7;
-    const speed = travelDistance / animationDuration;
-    const visibleTravelMs = speed > 0
-      ? Math.max(0, stageBounds.right - figureBounds.left) / speed
-      : 0;
-    entry.playbackStartedAt = Number.isFinite(animationTime)
-      ? animationTime
-      : 0;
-    entry.playbackDurationMs = visibleTravelMs * 2 / 3;
+    if (
+      this.state.completed.has(id) &&
+      !this.state.signedFirst.includes(id) &&
+      !this.state.unseenCompleted.includes(id) &&
+      !this.state.repeatBag.includes(id)
+    ) this.state.unseenCompleted.unshift(id);
   }
 
-  /** @param {ParadeEntry} entry */
-  connect(entry) {
-    entry.source?.close();
-    entry.replay?.reset();
-    const source = new EventSource(`/canvases/${entry.id}/stream`);
-    entry.source = source;
-    source.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === "snapshot") {
-        entry.pixels = decodePixels(message.pixels);
-        entry.replay?.reset();
-        drawPixels(entry.context, entry.pixels);
-      } else if (message.type === "diff") {
-        entry.replay?.receive(message.batches, Date.now());
+  /** @param {ParadeSlot} slot */
+  showPlaceholder(slot) {
+    slot.id = null;
+    slot.kind = "placeholder";
+    slot.hydrating = false;
+    slot.pendingCandidate = null;
+    slot.figure.dataset.canvasId = "";
+    slot.figure.dataset.kind = "placeholder";
+    slot.title.textContent = "Loading painting";
+    slot.author.textContent = "";
+    slot.state.className = "loading";
+    slot.state.textContent = "LOADING";
+    slot.pixels = createPixels();
+    slot.replay = null;
+    slot.timeline = null;
+    slot.nextStep = 0;
+    drawPixels(slot.context, slot.pixels);
+  }
+
+  /** @param {ParadeSlot} slot @param {PublicCanvas} canvas */
+  showActive(slot, canvas) {
+    slot.id = canvas.id;
+    slot.kind = "active";
+    slot.figure.dataset.canvasId = canvas.id;
+    slot.figure.dataset.kind = "active";
+    slot.title.textContent = canvas.title || "Painting now";
+    slot.author.textContent = canvas.author ? `by ${canvas.author}` : "";
+    slot.state.className = "live";
+    slot.state.textContent = "LIVE";
+    slot.pixels =
+      (this.livePixels.get(canvas.id) ?? decodePixels(canvas.pixels)).slice();
+    slot.replay = new LiveReplay({ lagMs: 500, catchUpThresholdMs: 2_000 });
+    slot.timeline = null;
+    slot.nextStep = 0;
+    drawPixels(slot.context, slot.pixels);
+  }
+
+  /** @param {ParadeSlot} slot @param {PublicCanvas} canvas @param {CanvasReplayResponse} timeline */
+  showCompleted(slot, canvas, timeline) {
+    slot.id = canvas.id;
+    slot.kind = "completed";
+    slot.figure.dataset.canvasId = canvas.id;
+    slot.figure.dataset.kind = "completed";
+    slot.title.textContent = canvas.title || "Untitled";
+    slot.author.textContent = canvas.author ? `by ${canvas.author}` : "";
+    slot.state.className = "replay";
+    slot.state.textContent = "REPLAY";
+    slot.pixels = decodePixels(timeline.initialPixels);
+    slot.replay = null;
+    slot.timeline = timeline;
+    slot.nextStep = 0;
+    drawPixels(slot.context, slot.pixels);
+    this.startCompletedPlayback(slot);
+  }
+
+  /** @param {string} canvasId */
+  async completedReplay(canvasId) {
+    let replay = this.replayCache.get(canvasId);
+    if (!replay) {
+      replay = this.queueReplayRequest(async () => {
+        const response = await fetch(`/canvases/${canvasId}/replay`);
+        if (!response.ok) throw new Error(`replay failed: ${response.status}`);
+        return await response.json();
+      });
+      this.replayCache.set(canvasId, replay);
+      void replay.catch(() => {
+        if (this.replayCache.get(canvasId) === replay) {
+          this.replayCache.delete(canvasId);
+        }
+      });
+    }
+    return await replay;
+  }
+
+  /** @template T @param {() => Promise<T>} request @returns {Promise<T>} */
+  queueReplayRequest(request) {
+    return new Promise((resolve, reject) => {
+      this.replayQueue.push(async () => {
+        try {
+          resolve(await request());
+        } catch (error) {
+          reject(error);
+        }
+      });
+      this.drainReplayQueue();
+    });
+  }
+
+  drainReplayQueue() {
+    while (this.replayRequestsInFlight < 2 && this.replayQueue.length > 0) {
+      const request = this.replayQueue.shift();
+      if (!request) return;
+      this.replayRequestsInFlight++;
+      void request().finally(() => {
+        this.replayRequestsInFlight--;
+        this.drainReplayQueue();
+      });
+    }
+  }
+
+  /** @param {ParadeSlot} slot */
+  startCompletedPlayback(slot) {
+    // Wall clock, NOT the card's CSS travel animation. Taking the clock from
+    // getAnimations()[0].currentTime meant that wherever the travel
+    // animation did not exist there was no clock at all: elapsed stayed
+    // pinned at zero and every completed card froze on its first frame.
+    // That is how it originally broke, via a prefers-reduced-motion rule
+    // that set animation:none; that rule is gone now, but the coupling was
+    // the real defect. Watching the strokes land is how a viewer reads the
+    // art, and it should never depend on whether the card is also moving.
+    slot.playbackStartedAt = Date.now();
+    const travelMs = Number(
+      slot.figure.getAnimations()[0]?.effect?.getComputedTiming().duration ??
+        0,
+    );
+    // A card is only replaced once it has travelled out of the viewport, so
+    // a replay longer than its own travel window would be cut off unseen.
+    // Where travel exists, keep the previous 0.68-of-travel ceiling so the
+    // replay still lands before the card goes; where it does not, nothing
+    // removes the card and the configured duration applies as-is.
+    slot.playbackDurationMs = travelMs > 0
+      ? Math.max(1, Math.min(config.completedReplayMs, travelMs * .68))
+      : Math.max(1, config.completedReplayMs);
+  }
+
+  /** @param {string} canvasId */
+  assignedSlots(canvasId) {
+    return this.slots.filter((slot) => slot.id === canvasId);
+  }
+
+  /** @param {ParadeSlot} slot */
+  recordAssignment(slot) {
+    this.dispatchEvent(
+      new CustomEvent("parade-spawn", {
+        detail: {
+          id: slot.id,
+          kind: slot.kind,
+          row: slot.figure.dataset.row,
+          slot: slot.index,
+        },
+      }),
+    );
+    const diagnostics = /** @type {any} */ (window);
+    diagnostics.__PAINTING_PARADE_EVENTS__ ??= [];
+    diagnostics.__PAINTING_PARADE_EVENTS__.push({
+      id: slot.id,
+      kind: slot.kind,
+      row: slot.figure.dataset.row,
+      slot: slot.index,
+      at: performance.now(),
+    });
+  }
+
+  async fetchCompletedPage() {
+    if (this.fetchingCompleted || !this.state.needsCompletedPage()) return;
+    this.fetchingCompleted = true;
+    try {
+      const cursor = this.state.completedCursor
+        ? `&cursor=${encodeURIComponent(this.state.completedCursor)}`
+        : "";
+      const response = await fetch(`/api/completed-feed?limit=20${cursor}`);
+      if (!response.ok) {
+        throw new Error(`completed feed failed: ${response.status}`);
       }
-    };
+      const page = /** @type {CompletedFeedResponse} */ (await response.json());
+      this.state.addCompletedPage(page.paintings, page.nextCursor);
+      if (this.liveSynced) void this.fillSlots();
+    } catch (error) {
+      this.dispatchEvent(new CustomEvent("parade-error", { detail: error }));
+    } finally {
+      this.fetchingCompleted = false;
+    }
   }
 
   drain() {
     if (this.hidden) return;
-    for (const entry of this.visible.values()) {
-      if (entry.kind === "active") {
+    for (const slot of this.slots) {
+      if (slot.kind === "active") {
         let changed = false;
-        for (const batch of entry.replay?.drain(Date.now()) ?? []) {
-          for (const [index, color] of batch.cells) entry.pixels[index] = color;
+        for (const batch of slot.replay?.drain(Date.now()) ?? []) {
+          for (const [index, color] of batch.cells) slot.pixels[index] = color;
           changed = true;
         }
-        if (changed) drawPixels(entry.context, entry.pixels);
+        if (changed) drawPixels(slot.context, slot.pixels);
         continue;
       }
-      if (!entry.timeline) continue;
-      if (entry.playbackStartedAt === null) {
-        const stageBounds = this.stage.getBoundingClientRect();
-        const figureBounds = entry.figure.getBoundingClientRect();
-        const fullyInside = figureBounds.left >= stageBounds.left - 1 &&
-          figureBounds.right <= stageBounds.right + 1;
-        if (
-          fullyInside ||
-          matchMedia("(prefers-reduced-motion: reduce)").matches
-        ) {
-          this.startCompletedPlayback(entry);
-        }
-      }
-      if (entry.playbackStartedAt === null) continue;
-      const animationTime = Number(entry.animation?.currentTime);
-      const elapsed = entry.playbackDurationMs <= 0
-        ? Number.POSITIVE_INFINITY
-        : Math.max(0, animationTime - entry.playbackStartedAt) *
-          entry.timeline.durationMs / entry.playbackDurationMs;
+      if (slot.kind !== "completed" || !slot.timeline) continue;
+      const elapsed = Math.max(0, Date.now() - slot.playbackStartedAt) *
+        slot.timeline.durationMs / slot.playbackDurationMs;
       let changed = false;
       while (
-        entry.nextStep < entry.timeline.steps.length &&
-        entry.timeline.steps[entry.nextStep].atMs <= elapsed
+        slot.nextStep < slot.timeline.steps.length &&
+        slot.timeline.steps[slot.nextStep].atMs <= elapsed
       ) {
-        const step = entry.timeline.steps[entry.nextStep++];
-        if (step.type === "snapshot") entry.pixels = decodePixels(step.pixels);
-        else applyEncodedCells(entry.pixels, step.cells);
+        const step = slot.timeline.steps[slot.nextStep++];
+        if (step.type === "snapshot") slot.pixels = decodePixels(step.pixels);
+        else applyEncodedCells(slot.pixels, step.cells);
         changed = true;
       }
-      if (changed) drawPixels(entry.context, entry.pixels);
+      if (changed) drawPixels(slot.context, slot.pixels);
       if (
-        elapsed >= entry.timeline.durationMs &&
-        entry.state.textContent !== "SIGNED"
+        elapsed >= slot.timeline.durationMs &&
+        slot.state.textContent !== "SIGNED"
       ) {
-        entry.pixels = decodePixels(entry.timeline.finalPixels);
-        drawPixels(entry.context, entry.pixels);
-        entry.state.textContent = "SIGNED";
+        slot.pixels = decodePixels(slot.timeline.finalPixels);
+        drawPixels(slot.context, slot.pixels);
+        slot.state.textContent = "SIGNED";
       }
     }
   }
 
-  /** @param {ParadeEntry} entry */
-  retire(entry) {
-    entry.source?.close();
-    entry.figure.remove();
-    this.visible.delete(entry.id);
+  updateLivePriority() {
+    clearTimeout(this.completedResumeTimer);
+    if (this.state.active.size > 0) {
+      this.hadLive = true;
+      this.completedResumeAt = Number.POSITIVE_INFINITY;
+    } else if (this.hadLive) {
+      this.completedResumeAt = Date.now() + config.completedResumeDelayMs;
+      this.completedResumeTimer = setTimeout(
+        () => void this.fillSlots(),
+        config.completedResumeDelayMs,
+      );
+    }
   }
 
   onVisibility() {
     this.hidden = document.visibilityState !== "visible";
     this.toggleAttribute("paused", this.hidden);
     if (this.hidden) {
-      for (const entry of this.visible.values()) entry.source?.close();
+      this.source?.close();
+      this.source = null;
       return;
     }
-    for (const entry of this.visible.values()) {
-      if (entry.kind === "active") this.connect(entry);
-    }
-    void this.refresh();
-    this.scheduleNextSpawn();
+    this.connect();
   }
 }
 

@@ -1,26 +1,44 @@
 {
+  "exclude": ["src/client/sw.js"],
   "tasks": {
-    "dev": "deno run -A --env-file src/server/main.ts",
-    "check": "deno check src tests scripts",
-    "test": "deno test --allow-read=public,src/client,src/shared --ignore=tests/db_test.ts,tests/sync-routes_test.ts tests",
+    "dev": "PAINTING_DEV=1 deno run -A --env-file src/server/main.ts",
+    "check": "deno check src tests scripts && deno check --config deno.worker.json src/client/sw.js",
+    "test": "deno test --allow-read=public,src/client,src/shared,.env.example --allow-env=GUEST_SESSION_SECRET,GUEST_SESSION_SECRET_PREVIOUS,PAINTING_KEYS,PAINTING_E2E,PAINTING_DEV,WEBAUTHN_RP_ID,WEBAUTHN_ORIGINS --ignore=tests/db_test.ts,tests/sync-routes_test.ts,tests/auth-merge_test.ts,tests/transfer-codes_test.ts tests",
     "test:replay": "deno test --allow-read=src/client,src/shared tests/live-replay_test.js",
     "test:db": "deno test --allow-net --allow-env --allow-read tests/db_test.ts",
     "test:routes": "deno test --allow-net --allow-env --allow-read tests/sync-routes_test.ts",
-    "test:e2e": "deno run --env-file --allow-net --allow-env --allow-read --allow-run scripts/ephemeral-test-db.ts",
+    "test:e2e": "deno task test:e2e:routes && deno task test:e2e:carousel",
+    "test:e2e:routes": "deno run --env-file --allow-net --allow-env --allow-read --allow-run scripts/ephemeral-test-db.ts",
+    "test:e2e:carousel": "deno run --env-file -A scripts/carousel-e2e.ts",
+    "test:e2e:carousel:headed": "deno run --env-file -A scripts/carousel-e2e.ts --headed",
+    "test:e2e:reduced-motion": "deno run --env-file -A scripts/e2e-reduced-motion.ts",
+    "test:e2e:passkey": "deno run --env-file -A scripts/e2e-passkey.ts",
+    "test:e2e:signout": "deno run --env-file -A scripts/e2e-signout-teardown.ts",
+    "test:e2e:transfer": "deno run --env-file -A scripts/e2e-transfer.ts",
+    "test:e2e:merge-dialog": "deno run --env-file -A scripts/e2e-merge-dialog.ts",
+    "test:e2e:sw-update": "deno run --env-file -A scripts/e2e-sw-update.ts",
+    "test:e2e:sw-sse": "deno run --env-file -A scripts/e2e-sw-sse.ts",
+    "test:e2e:pwa-install": "deno run --env-file -A scripts/e2e-pwa-install.ts",
+    "test:e2e:pwa-persist": "deno run --env-file -A scripts/e2e-pwa-persist.ts",
     "migrate:prod": "deno run --env-file --allow-net --allow-env --allow-read scripts/migrate-prod.ts",
     "bootstrap:dev": "deno run --env-file --allow-net --allow-env --allow-read scripts/bootstrap-dev-db.ts",
     "backup:db": "deno run --env-file --allow-net --allow-env --allow-read --allow-write scripts/backup-environment-db.ts",
     "clear:db": "deno run --env-file --allow-net --allow-env scripts/clear-environment-db.ts",
     "save": "deno run --allow-run --allow-read --allow-write scripts/save.ts",
-    "seed:dev": "deno run --allow-net --allow-env scripts/seed-dev-canvases.ts"
+    "env:check": "deno run --allow-read=.env,.env.example scripts/env-check.ts",
+    "env:fill": "deno run --allow-read=.env,.env.example,.gitignore --allow-write scripts/env-fill.ts",
+    "seed:dev": "deno run --allow-net --allow-env scripts/seed-dev-canvases.ts",
+    "backfill:profiles": "deno run --env-file --allow-net --allow-env --allow-read scripts/backfill-profiles.ts"
   },
   "compilerOptions": {
     "checkJs": true,
     "lib": ["dom", "dom.iterable", "deno.ns"]
   },
   "imports": {
+    "@simplewebauthn/server": "npm:@simplewebauthn/server@13.3.2",
     "@std/assert": "jsr:@std/assert@1.0.19",
-    "@tursodatabase/serverless/compat": "npm:@tursodatabase/serverless@1.4.0/compat"
+    "@tursodatabase/serverless/compat": "npm:@tursodatabase/serverless@1.4.0/compat",
+    "playwright-core": "npm:playwright-core@1.55.0"
   },
   "deploy": {
     "org": "legoguy32109",
@@ -31,3 +49,7 @@
     }
   }
 }
+
+
+
+
